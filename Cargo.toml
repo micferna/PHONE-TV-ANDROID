@@ -1,6 +1,6 @@
 [package]
 name = "phone-tv"
-version = "3.0.0"
+version = "4.0.0"
 edition = "2021"
 description = "Contrôle Android Phone & TV via ADB"
 authors = ["OCB"]
@@ -12,3 +12,5 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 dirs = "6.0"
 anyhow = "1.0"
 rfd = "0.17"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
