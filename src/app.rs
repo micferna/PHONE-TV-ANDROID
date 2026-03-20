@@ -168,7 +168,8 @@ impl PhoneTvApp {
     }
 
     pub fn log(&mut self, msg: &str) {
-        self.logs.push_back(msg.to_string());
+        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+        self.logs.push_back(format!("[{}] {}", now, msg));
         if self.logs.len() > 15 {
             self.logs.pop_front();
         }
@@ -743,7 +744,7 @@ impl eframe::App for PhoneTvApp {
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
                         for log in &self.logs {
-                            ui.label(egui::RichText::new(log).small());
+                            ui.label(egui::RichText::new(log).small().family(egui::FontFamily::Monospace));
                         }
                     });
             }
