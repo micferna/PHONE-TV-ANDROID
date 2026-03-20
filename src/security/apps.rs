@@ -99,17 +99,30 @@ pub fn get_app_detail(device_id: &str, package: &str) -> Option<AppInfo> {
 }
 
 pub fn uninstall_app(device_id: &str, package: &str) -> (bool, String) {
-    match Command::new("adb")
-        .args(["-s", device_id, "shell", "pm", "uninstall", package])
+    // Try `adb uninstall` first (works for user-installed apps)
+    if let Ok(o) = Command::new("adb")
+        .args(["-s", device_id, "uninstall", package])
         .output()
     {
-        Ok(o) => {
-            let stdout = String::from_utf8_lossy(&o.stdout).to_string();
-            let success = stdout.contains("Success");
-            (success, stdout.trim().to_string())
+        let stdout = String::from_utf8_lossy(&o.stdout).to_string();
+        if stdout.contains("Success") {
+            return (true, format!("{} désinstallé", package));
         }
-        Err(e) => (false, format!("Erreur: {}", e)),
     }
+
+    // Fallback: `pm uninstall --user 0` (removes for current user, keeps on device)
+    if let Ok(o) = Command::new("adb")
+        .args(["-s", device_id, "shell", "pm", "uninstall", "--user", "0", package])
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&o.stdout).to_string();
+        if stdout.contains("Success") {
+            return (true, format!("{} désinstallé (utilisateur)", package));
+        }
+        return (false, format!("Échec : {}", stdout.trim()));
+    }
+
+    (false, "Erreur de commande ADB".to_string())
 }
 
 pub fn disable_app(device_id: &str, package: &str) -> (bool, String) {
