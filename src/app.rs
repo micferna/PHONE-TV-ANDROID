@@ -769,8 +769,12 @@ impl eframe::App for PhoneTvApp {
                 ui::draw_sidebar(self, ui, ctx);
             });
 
-        // Bottom panel: logs
+        // Bottom panel: logs (resizable)
         egui::TopBottomPanel::bottom("footer")
+            .resizable(true)
+            .default_height(if self.logs_collapsed { 36.0 } else { 160.0 })
+            .min_height(36.0)
+            .max_height(400.0)
             .frame(
                 egui::Frame::NONE
                     .inner_margin(8.0)
@@ -812,7 +816,6 @@ impl eframe::App for PhoneTvApp {
                 if !self.logs_collapsed {
                     ui.add_space(4.0);
                     egui::ScrollArea::vertical()
-                        .max_height(140.0)
                         .stick_to_bottom(true)
                         .show(ui, |ui| {
                             for log in &self.logs {
