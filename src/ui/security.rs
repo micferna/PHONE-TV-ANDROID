@@ -51,7 +51,7 @@ pub fn draw_security(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
         SecurityView::Score => draw_score(ui, app, ctx),
         SecurityView::Apps => draw_apps(ui, app, ctx),
         SecurityView::Permissions => draw_permissions(ui, app, ctx),
-        SecurityView::Blacklist => draw_blacklist_stub(ui, app),
+        SecurityView::Blacklist => draw_blacklist(ui, app, ctx),
         SecurityView::Monitoring => draw_monitoring_stub(ui, app),
         SecurityView::Posture => draw_posture_stub(ui, app),
     }
@@ -1016,11 +1016,211 @@ fn draw_permissions_by_app(
     }
 }
 
-// ── Stubs for remaining views ───────────────────────────────────────
-fn draw_blacklist_stub(ui: &mut egui::Ui, _app: &PhoneTvApp) {
-    ui.label(egui::RichText::new("Blacklist — coming soon").italics());
+// ═══════════════════════════════════════════════════════════════════
+// Task 14: Blacklist UI
+// ═══════════════════════════════════════════════════════════════════
+fn draw_blacklist(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
+    let device_id = app.get_selected_id();
+
+    // Check alerts on first visit
+    if app.blacklist_alerts.is_empty() && !app.blacklist.is_empty() && !app.security_apps.is_empty()
+    {
+        let found: Vec<String> = app
+            .blacklist
+            .iter()
+            .filter(|b| app.security_apps.iter().any(|a| &a.package == *b))
+            .cloned()
+            .collect();
+        if !found.is_empty() {
+            app.blacklist_alerts = found;
+        }
+    }
+
+    // Alert banner
+    if !app.blacklist_alerts.is_empty() {
+        egui::Frame::NONE
+            .corner_radius(8.0)
+            .inner_margin(12.0)
+            .fill(egui::Color32::from_rgb(80, 20, 20))
+            .stroke(egui::Stroke::new(1.0, theme::danger_color()))
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new("Applications blacklistees detectees !")
+                        .strong()
+                        .color(theme::danger_color()),
+                );
+                ui.add_space(4.0);
+
+                let alerts = app.blacklist_alerts.clone();
+                for pkg in &alerts {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("  {}", pkg))
+                                .color(egui::Color32::WHITE),
+                        );
+
+                        if let Some(ref dev) = device_id {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("Desactiver")
+                                            .small()
+                                            .color(theme::warning_color()),
+                                    )
+                                    .small(),
+                                )
+                                .clicked()
+                            {
+                                let tx = app.bg_tx.clone();
+                                let ctx2 = ctx.clone();
+                                let dev2 = dev.clone();
+                                let pkg2 = pkg.clone();
+                                std::thread::spawn(move || {
+                                    let (success, message) =
+                                        crate::security::apps::disable_app(&dev2, &pkg2);
+                                    let _ = tx.send(BgEvent::AppActionResult {
+                                        package: pkg2,
+                                        action: "disable".into(),
+                                        success,
+                                        message,
+                                    });
+                                    ctx2.request_repaint();
+                                });
+                            }
+
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("Desinstaller")
+                                            .small()
+                                            .color(theme::danger_color()),
+                                    )
+                                    .small(),
+                                )
+                                .clicked()
+                            {
+                                let tx = app.bg_tx.clone();
+                                let ctx2 = ctx.clone();
+                                let dev2 = dev.clone();
+                                let pkg2 = pkg.clone();
+                                std::thread::spawn(move || {
+                                    let (success, message) =
+                                        crate::security::apps::uninstall_app(&dev2, &pkg2);
+                                    let _ = tx.send(BgEvent::AppActionResult {
+                                        package: pkg2,
+                                        action: "uninstall".into(),
+                                        success,
+                                        message,
+                                    });
+                                    ctx2.request_repaint();
+                                });
+                            }
+                        }
+                    });
+                }
+            });
+        ui.add_space(8.0);
+    }
+
+    // Refresh alerts button
+    ui.horizontal(|ui| {
+        ui.heading(egui::RichText::new("Blacklist").size(16.0));
+        if ui.button("Verifier alertes").clicked() {
+            let found: Vec<String> = app
+                .blacklist
+                .iter()
+                .filter(|b| app.security_apps.iter().any(|a| &a.package == *b))
+                .cloned()
+                .collect();
+            app.blacklist_alerts = found;
+        }
+    });
+
+    ui.add_space(8.0);
+
+    // Add entry
+    ui.horizontal(|ui| {
+        ui.label("Ajouter:");
+        ui.add(
+            egui::TextEdit::singleline(&mut app.blacklist_new_entry)
+                .desired_width(300.0)
+                .hint_text("com.example.package"),
+        );
+        if ui.button("Ajouter").clicked() && !app.blacklist_new_entry.is_empty() {
+            let entry = app.blacklist_new_entry.trim().to_string();
+            if !app.blacklist.contains(&entry) {
+                app.blacklist.push(entry);
+                crate::config::save_blacklist(&app.blacklist);
+            }
+            app.blacklist_new_entry.clear();
+        }
+    });
+
+    // Import / Export
+    ui.horizontal(|ui| {
+        if ui.button("Importer").clicked() {
+            if let Some(path) = rfd::FileDialog::new().pick_file() {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    for line in content.lines() {
+                        let line = line.trim().to_string();
+                        if !line.is_empty() && !app.blacklist.contains(&line) {
+                            app.blacklist.push(line);
+                        }
+                    }
+                    crate::config::save_blacklist(&app.blacklist);
+                    app.log("Blacklist importee");
+                }
+            }
+        }
+        if ui.button("Exporter").clicked() {
+            if let Some(path) = rfd::FileDialog::new().save_file() {
+                let content = app.blacklist.join("\n");
+                if std::fs::write(&path, content).is_ok() {
+                    app.log("Blacklist exportee");
+                }
+            }
+        }
+    });
+
+    ui.add_space(8.0);
+
+    // Blacklist entries
+    ui.label(
+        egui::RichText::new(format!("{} entree(s)", app.blacklist.len()))
+            .size(13.0)
+            .color(theme::text_secondary(app.dark_mode)),
+    );
+
+    let mut to_remove: Option<usize> = None;
+
+    egui::ScrollArea::vertical()
+        .max_height(ui.available_height() - 20.0)
+        .show(ui, |ui| {
+            for (i, entry) in app.blacklist.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(entry);
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("\u{2715}").color(theme::danger_color()),
+                            )
+                            .small(),
+                        )
+                        .clicked()
+                    {
+                        to_remove = Some(i);
+                    }
+                });
+            }
+        });
+
+    if let Some(idx) = to_remove {
+        app.blacklist.remove(idx);
+        crate::config::save_blacklist(&app.blacklist);
+    }
 }
 
+// ── Stubs for remaining views ───────────────────────────────────────
 fn draw_monitoring_stub(ui: &mut egui::Ui, _app: &PhoneTvApp) {
     ui.label(egui::RichText::new("Monitoring — coming soon").italics());
 }
