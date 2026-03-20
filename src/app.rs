@@ -772,7 +772,7 @@ impl eframe::App for PhoneTvApp {
         // Bottom panel: logs (resizable)
         egui::TopBottomPanel::bottom("footer")
             .resizable(true)
-            .default_height(if self.logs_collapsed { 36.0 } else { 160.0 })
+            .default_height(160.0)
             .min_height(36.0)
             .max_height(400.0)
             .frame(
