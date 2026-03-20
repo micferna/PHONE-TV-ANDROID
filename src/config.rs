@@ -113,3 +113,20 @@ pub fn save_channels(channels: &[TvChannel]) {
         }
     }
 }
+
+pub fn blacklist_path() -> PathBuf {
+    config_dir().join("blacklist.txt")
+}
+
+pub fn load_blacklist() -> Vec<String> {
+    std::fs::read_to_string(blacklist_path())
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+pub fn save_blacklist(blacklist: &[String]) {
+    let _ = std::fs::write(blacklist_path(), blacklist.join("\n"));
+}

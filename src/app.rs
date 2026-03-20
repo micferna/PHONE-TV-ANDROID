@@ -1,7 +1,9 @@
 use eframe::egui;
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
@@ -67,6 +69,29 @@ pub struct PhoneTvApp {
     // Phone apps (NEW)
     pub phone_apps: Vec<String>,
     pub phone_apps_loading: bool,
+    // Security
+    pub security_view: SecurityView,
+    pub security_score: Option<(u8, Vec<SecurityIssue>)>,
+    pub security_score_loading: bool,
+    pub security_apps: Vec<AppInfo>,
+    pub security_apps_filter: AppFilter,
+    pub security_apps_sort: AppSort,
+    pub security_apps_search: String,
+    pub security_apps_loading: bool,
+    pub security_loading_cancel: Arc<AtomicBool>,
+    pub security_permission_view: PermissionView,
+    pub security_permission_cache: HashMap<String, Vec<PermissionInfo>>,
+    pub security_selected_app: Option<String>,
+    pub security_monitoring_view: MonitoringView,
+    pub security_processes: Vec<ProcessInfo>,
+    pub security_data_usage: Vec<DataUsage>,
+    pub security_wakelocks: Vec<WakelockInfo>,
+    pub security_posture: Vec<DevicePosture>,
+    pub blacklist: Vec<String>,
+    pub blacklist_alerts: Vec<String>,
+    pub blacklist_new_entry: String,
+    pub confirm_clear_data: Option<String>,
+    pub confirm_uninstall: Option<String>,
 }
 
 impl PhoneTvApp {
@@ -116,6 +141,29 @@ impl PhoneTvApp {
             phone_battery: None,
             phone_apps: Vec::new(),
             phone_apps_loading: false,
+            // Security
+            security_view: SecurityView::Score,
+            security_score: None,
+            security_score_loading: false,
+            security_apps: Vec::new(),
+            security_apps_filter: AppFilter::All,
+            security_apps_sort: AppSort::Name,
+            security_apps_search: String::new(),
+            security_apps_loading: false,
+            security_loading_cancel: Arc::new(AtomicBool::new(false)),
+            security_permission_view: PermissionView::ByPermission,
+            security_permission_cache: HashMap::new(),
+            security_selected_app: None,
+            security_monitoring_view: MonitoringView::Processes,
+            security_processes: Vec::new(),
+            security_data_usage: Vec::new(),
+            security_wakelocks: Vec::new(),
+            security_posture: Vec::new(),
+            blacklist: config::load_blacklist(),
+            blacklist_alerts: Vec::new(),
+            blacklist_new_entry: String::new(),
+            confirm_clear_data: None,
+            confirm_uninstall: None,
         }
     }
 
@@ -582,18 +630,46 @@ impl PhoneTvApp {
                 BgEvent::Log(msg) => {
                     self.log(&msg);
                 }
-                // Security events (handled in Task 3)
-                BgEvent::SecurityScore { .. }
-                | BgEvent::SecurityAppsList { .. }
-                | BgEvent::SecurityAppDetail { .. }
-                | BgEvent::SecurityProcesses { .. }
-                | BgEvent::SecurityDataUsage { .. }
-                | BgEvent::SecurityWakelocks { .. }
-                | BgEvent::SecurityPosture { .. }
-                | BgEvent::SecurityPermissions { .. }
-                | BgEvent::BlacklistAlert { .. }
-                | BgEvent::AppActionResult { .. }
-                | BgEvent::SecurityAppsLoadingDone => {}
+                BgEvent::SecurityScore { score, issues } => {
+                    self.security_score = Some((score, issues));
+                    self.security_score_loading = false;
+                }
+                BgEvent::SecurityAppsList { packages } => {
+                    self.security_apps = packages
+                        .into_iter()
+                        .map(|p| AppInfo { package: p, ..Default::default() })
+                        .collect();
+                }
+                BgEvent::SecurityAppDetail { package, info } => {
+                    if let Some(app) = self.security_apps.iter_mut().find(|a| a.package == package) {
+                        *app = info;
+                    }
+                }
+                BgEvent::SecurityProcesses { processes } => {
+                    self.security_processes = processes;
+                }
+                BgEvent::SecurityDataUsage { usage } => {
+                    self.security_data_usage = usage;
+                }
+                BgEvent::SecurityWakelocks { wakelocks } => {
+                    self.security_wakelocks = wakelocks;
+                }
+                BgEvent::SecurityPosture { checks } => {
+                    self.security_posture = checks;
+                }
+                BgEvent::SecurityPermissions { package, permissions } => {
+                    self.security_permission_cache.insert(package, permissions);
+                }
+                BgEvent::BlacklistAlert { found } => {
+                    self.blacklist_alerts = found;
+                }
+                BgEvent::AppActionResult { package, action, success, message } => {
+                    let status = if success { "OK" } else { "FAIL" };
+                    self.log(&format!("[{}] {} {}: {}", status, action, package, message));
+                }
+                BgEvent::SecurityAppsLoadingDone => {
+                    self.security_apps_loading = false;
+                }
             }
         }
     }
