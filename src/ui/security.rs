@@ -52,7 +52,7 @@ pub fn draw_security(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
         SecurityView::Apps => draw_apps(ui, app, ctx),
         SecurityView::Permissions => draw_permissions(ui, app, ctx),
         SecurityView::Blacklist => draw_blacklist(ui, app, ctx),
-        SecurityView::Monitoring => draw_monitoring_stub(ui, app),
+        SecurityView::Monitoring => draw_monitoring(ui, app, ctx),
         SecurityView::Posture => draw_posture_stub(ui, app),
     }
 }
@@ -1220,11 +1220,313 @@ fn draw_blacklist(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) 
     }
 }
 
-// ── Stubs for remaining views ───────────────────────────────────────
-fn draw_monitoring_stub(ui: &mut egui::Ui, _app: &PhoneTvApp) {
-    ui.label(egui::RichText::new("Monitoring — coming soon").italics());
+// ── Helper: format bytes ────────────────────────────────────────────
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        return "0".to_string();
+    }
+    let kb = bytes / 1024;
+    if kb < 1024 {
+        return format!("{} KB", kb);
+    }
+    let mb = kb / 1024;
+    if mb < 1024 {
+        return format!("{} MB", mb);
+    }
+    let gb = mb / 1024;
+    format!("{} GB", gb)
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Task 15: Monitoring UI
+// ═══════════════════════════════════════════════════════════════════
+fn draw_monitoring(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
+    let device_id = match app.get_selected_id() {
+        Some(id) => id,
+        None => {
+            ui.label(
+                egui::RichText::new("Selectionnez un appareil.")
+                    .color(theme::text_secondary(app.dark_mode)),
+            );
+            return;
+        }
+    };
+
+    // Sub-view toggle
+    ui.horizontal(|ui| {
+        let views = [
+            (MonitoringView::Processes, "Processus"),
+            (MonitoringView::DataUsage, "Donnees"),
+            (MonitoringView::Wakelocks, "Wakelocks"),
+        ];
+        for (view, label) in views {
+            let selected = app.security_monitoring_view == view;
+            let text = egui::RichText::new(label).size(13.0);
+            let text = if selected {
+                text.strong().color(theme::accent_color())
+            } else {
+                text.color(theme::text_secondary(app.dark_mode))
+            };
+            let btn = egui::Button::new(text).corner_radius(4.0);
+            let btn = if selected {
+                btn.fill(theme::card_selected(app.dark_mode))
+            } else {
+                btn.fill(egui::Color32::TRANSPARENT)
+            };
+            if ui.add(btn).clicked() {
+                app.security_monitoring_view = view;
+            }
+        }
+    });
+
+    ui.add_space(8.0);
+
+    match app.security_monitoring_view {
+        MonitoringView::Processes => draw_processes(ui, app, ctx, &device_id),
+        MonitoringView::DataUsage => draw_data_usage(ui, app, ctx, &device_id),
+        MonitoringView::Wakelocks => draw_wakelocks(ui, app, ctx, &device_id),
+    }
+}
+
+fn draw_processes(
+    ui: &mut egui::Ui,
+    app: &mut PhoneTvApp,
+    ctx: &egui::Context,
+    device_id: &str,
+) {
+    ui.horizontal(|ui| {
+        if ui.button("Rafraichir").clicked() {
+            let tx = app.bg_tx.clone();
+            let ctx2 = ctx.clone();
+            let id = device_id.to_string();
+            std::thread::spawn(move || {
+                let processes =
+                    crate::security::monitoring::get_running_processes(&id);
+                let _ = tx.send(BgEvent::SecurityProcesses { processes });
+                ctx2.request_repaint();
+            });
+        }
+        ui.label(
+            egui::RichText::new(format!("{} processus", app.security_processes.len()))
+                .color(theme::text_secondary(app.dark_mode)),
+        );
+    });
+
+    ui.add_space(8.0);
+
+    let dark = app.dark_mode;
+
+    egui::ScrollArea::vertical()
+        .max_height(ui.available_height() - 20.0)
+        .show(ui, |ui| {
+            egui::Grid::new("processes_grid")
+                .num_columns(5)
+                .striped(true)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    // Header
+                    ui.label(egui::RichText::new("Package").strong());
+                    ui.label(egui::RichText::new("PID").strong());
+                    ui.label(egui::RichText::new("Memoire").strong());
+                    ui.label(egui::RichText::new("Etat").strong());
+                    ui.label(egui::RichText::new("Action").strong());
+                    ui.end_row();
+
+                    let processes = app.security_processes.clone();
+                    for proc in &processes {
+                        ui.label(
+                            egui::RichText::new(&proc.package).size(12.0),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("{}", proc.pid))
+                                .size(12.0)
+                                .color(theme::text_secondary(dark)),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} MB",
+                                proc.memory_kb / 1024
+                            ))
+                            .size(12.0),
+                        );
+
+                        let state_color = match proc.state.as_str() {
+                            "foreground" | "visible" => theme::success_color(),
+                            "service" => theme::accent_blue(),
+                            _ => theme::text_dim(dark),
+                        };
+                        ui.label(
+                            egui::RichText::new(&proc.state)
+                                .size(12.0)
+                                .color(state_color),
+                        );
+
+                        if ui.small_button("Kill").clicked() {
+                            let tx = app.bg_tx.clone();
+                            let ctx2 = ctx.clone();
+                            let dev = device_id.to_string();
+                            let pkg = proc.package.clone();
+                            std::thread::spawn(move || {
+                                crate::security::apps::force_stop_app(&dev, &pkg);
+                                let _ = tx.send(BgEvent::AppActionResult {
+                                    package: pkg,
+                                    action: "kill".into(),
+                                    success: true,
+                                    message: "OK".into(),
+                                });
+                                // Refresh processes
+                                let processes =
+                                    crate::security::monitoring::get_running_processes(
+                                        &dev,
+                                    );
+                                let _ = tx
+                                    .send(BgEvent::SecurityProcesses { processes });
+                                ctx2.request_repaint();
+                            });
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
+}
+
+fn draw_data_usage(
+    ui: &mut egui::Ui,
+    app: &mut PhoneTvApp,
+    ctx: &egui::Context,
+    device_id: &str,
+) {
+    let dark = app.dark_mode;
+
+    ui.horizontal(|ui| {
+        if ui.button("Rafraichir").clicked() {
+            let tx = app.bg_tx.clone();
+            let ctx2 = ctx.clone();
+            let id = device_id.to_string();
+            std::thread::spawn(move || {
+                let usage = crate::security::monitoring::get_data_usage(&id);
+                let _ = tx.send(BgEvent::SecurityDataUsage { usage });
+                ctx2.request_repaint();
+            });
+        }
+        ui.label(
+            egui::RichText::new("Donnees cumulees depuis le dernier reset")
+                .small()
+                .color(theme::text_secondary(dark)),
+        );
+    });
+
+    ui.add_space(8.0);
+
+    egui::ScrollArea::vertical()
+        .max_height(ui.available_height() - 20.0)
+        .show(ui, |ui| {
+            egui::Grid::new("data_usage_grid")
+                .num_columns(5)
+                .striped(true)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("Package").strong());
+                    ui.label(egui::RichText::new("WiFi RX").strong());
+                    ui.label(egui::RichText::new("WiFi TX").strong());
+                    ui.label(egui::RichText::new("Mobile RX").strong());
+                    ui.label(egui::RichText::new("Mobile TX").strong());
+                    ui.end_row();
+
+                    for usage in &app.security_data_usage {
+                        ui.label(
+                            egui::RichText::new(&usage.package).size(12.0),
+                        );
+                        ui.label(
+                            egui::RichText::new(format_bytes(usage.wifi_rx))
+                                .size(12.0)
+                                .color(theme::text_secondary(dark)),
+                        );
+                        ui.label(
+                            egui::RichText::new(format_bytes(usage.wifi_tx))
+                                .size(12.0)
+                                .color(theme::text_secondary(dark)),
+                        );
+                        ui.label(
+                            egui::RichText::new(format_bytes(usage.mobile_rx))
+                                .size(12.0)
+                                .color(theme::text_secondary(dark)),
+                        );
+                        ui.label(
+                            egui::RichText::new(format_bytes(usage.mobile_tx))
+                                .size(12.0)
+                                .color(theme::text_secondary(dark)),
+                        );
+                        ui.end_row();
+                    }
+                });
+        });
+}
+
+fn draw_wakelocks(
+    ui: &mut egui::Ui,
+    app: &mut PhoneTvApp,
+    ctx: &egui::Context,
+    device_id: &str,
+) {
+    let dark = app.dark_mode;
+
+    ui.horizontal(|ui| {
+        if ui.button("Rafraichir").clicked() {
+            let tx = app.bg_tx.clone();
+            let ctx2 = ctx.clone();
+            let id = device_id.to_string();
+            std::thread::spawn(move || {
+                let wakelocks = crate::security::monitoring::get_wakelocks(&id);
+                let _ = tx.send(BgEvent::SecurityWakelocks { wakelocks });
+                ctx2.request_repaint();
+            });
+        }
+        ui.label(
+            egui::RichText::new(format!("{} wakelock(s)", app.security_wakelocks.len()))
+                .color(theme::text_secondary(dark)),
+        );
+    });
+
+    ui.add_space(8.0);
+
+    egui::ScrollArea::vertical()
+        .max_height(ui.available_height() - 20.0)
+        .show(ui, |ui| {
+            egui::Grid::new("wakelocks_grid")
+                .num_columns(2)
+                .striped(true)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("Package").strong());
+                    ui.label(egui::RichText::new("Duree").strong());
+                    ui.end_row();
+
+                    for wl in &app.security_wakelocks {
+                        ui.label(
+                            egui::RichText::new(&wl.package).size(12.0),
+                        );
+
+                        // Color: >30min red, >5min orange, else normal
+                        let duration_color = if wl.duration_ms > 30 * 60 * 1000 {
+                            theme::danger_color()
+                        } else if wl.duration_ms > 5 * 60 * 1000 {
+                            theme::warning_color()
+                        } else {
+                            theme::text_secondary(dark)
+                        };
+                        ui.label(
+                            egui::RichText::new(&wl.duration_human)
+                                .size(12.0)
+                                .color(duration_color),
+                        );
+                        ui.end_row();
+                    }
+                });
+        });
+}
+
+// ── Stub for remaining view ─────────────────────────────────────────
 fn draw_posture_stub(ui: &mut egui::Ui, _app: &PhoneTvApp) {
     ui.label(egui::RichText::new("Device posture — coming soon").italics());
 }
