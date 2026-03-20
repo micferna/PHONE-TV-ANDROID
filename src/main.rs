@@ -1,6 +1,7 @@
 mod adb;
 mod app;
 mod config;
+mod security;
 mod theme;
 mod types;
 mod ui;

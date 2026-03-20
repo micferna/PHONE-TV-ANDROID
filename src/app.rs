@@ -759,7 +759,7 @@ impl eframe::App for PhoneTvApp {
                     Tab::Tv => ui::draw_tv(self, ui, ctx),
                     Tab::Phone => ui::draw_phone(self, ui, ctx),
                     Tab::Video => ui::draw_video(self, ui, ctx),
-                    Tab::Security => {}
+                    Tab::Security => ui::draw_security(self, ui, ctx),
                 }
             });
         });
