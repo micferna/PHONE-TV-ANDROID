@@ -155,6 +155,7 @@ impl PhoneTvApp {
                 .map(|d| d.device_type == DeviceType::Phone)
                 .unwrap_or(false),
             Tab::Video => self.get_selected_id().is_some(),
+            Tab::Security => self.get_selected_id().is_some(),
         }
     }
 
@@ -581,6 +582,18 @@ impl PhoneTvApp {
                 BgEvent::Log(msg) => {
                     self.log(&msg);
                 }
+                // Security events (handled in Task 3)
+                BgEvent::SecurityScore { .. }
+                | BgEvent::SecurityAppsList { .. }
+                | BgEvent::SecurityAppDetail { .. }
+                | BgEvent::SecurityProcesses { .. }
+                | BgEvent::SecurityDataUsage { .. }
+                | BgEvent::SecurityWakelocks { .. }
+                | BgEvent::SecurityPosture { .. }
+                | BgEvent::SecurityPermissions { .. }
+                | BgEvent::BlacklistAlert { .. }
+                | BgEvent::AppActionResult { .. }
+                | BgEvent::SecurityAppsLoadingDone => {}
             }
         }
     }
@@ -670,6 +683,7 @@ impl eframe::App for PhoneTvApp {
                     Tab::Tv => ui::draw_tv(self, ui, ctx),
                     Tab::Phone => ui::draw_phone(self, ui, ctx),
                     Tab::Video => ui::draw_video(self, ui, ctx),
+                    Tab::Security => {}
                 }
             });
         });
