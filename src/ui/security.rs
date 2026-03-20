@@ -50,7 +50,7 @@ pub fn draw_security(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
     match app.security_view {
         SecurityView::Score => draw_score(ui, app, ctx),
         SecurityView::Apps => draw_apps(ui, app, ctx),
-        SecurityView::Permissions => draw_permissions_stub(ui, app),
+        SecurityView::Permissions => draw_permissions(ui, app, ctx),
         SecurityView::Blacklist => draw_blacklist_stub(ui, app),
         SecurityView::Monitoring => draw_monitoring_stub(ui, app),
         SecurityView::Posture => draw_posture_stub(ui, app),
@@ -641,11 +641,382 @@ fn draw_confirm_dialogs(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &s
     }
 }
 
-// ── Stubs for remaining views ───────────────────────────────────────
-fn draw_permissions_stub(ui: &mut egui::Ui, _app: &PhoneTvApp) {
-    ui.label(egui::RichText::new("Permission audit — coming soon").italics());
+// ═══════════════════════════════════════════════════════════════════
+// Task 13: Permission audit UI
+// ═══════════════════════════════════════════════════════════════════
+fn draw_permissions(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
+    let device_id = match app.get_selected_id() {
+        Some(id) => id,
+        None => {
+            ui.label(
+                egui::RichText::new("Selectionnez un appareil.")
+                    .color(theme::text_secondary(app.dark_mode)),
+            );
+            return;
+        }
+    };
+
+    // Toggle buttons
+    ui.horizontal(|ui| {
+        let views = [
+            (PermissionView::ByPermission, "Par permission"),
+            (PermissionView::ByApp, "Par application"),
+        ];
+        for (view, label) in views {
+            let selected = app.security_permission_view == view;
+            let text = egui::RichText::new(label).size(13.0);
+            let text = if selected {
+                text.strong().color(theme::accent_color())
+            } else {
+                text.color(theme::text_secondary(app.dark_mode))
+            };
+            let btn = egui::Button::new(text).corner_radius(4.0);
+            let btn = if selected {
+                btn.fill(theme::card_selected(app.dark_mode))
+            } else {
+                btn.fill(egui::Color32::TRANSPARENT)
+            };
+            if ui.add(btn).clicked() {
+                app.security_permission_view = view;
+            }
+        }
+
+        ui.separator();
+
+        // Load permissions button
+        if ui.button("Charger permissions").clicked() {
+            let apps: Vec<String> = app
+                .security_apps
+                .iter()
+                .map(|a| a.package.clone())
+                .collect();
+            let tx = app.bg_tx.clone();
+            let ctx2 = ctx.clone();
+            let id = device_id.clone();
+            std::thread::spawn(move || {
+                for pkg in &apps {
+                    let perms =
+                        crate::security::permissions::get_app_permissions(&id, pkg);
+                    let _ = tx.send(BgEvent::SecurityPermissions {
+                        package: pkg.clone(),
+                        permissions: perms,
+                    });
+                    ctx2.request_repaint();
+                }
+            });
+        }
+    });
+
+    ui.add_space(8.0);
+
+    match app.security_permission_view {
+        PermissionView::ByPermission => {
+            draw_permissions_by_permission(ui, app, ctx, &device_id)
+        }
+        PermissionView::ByApp => draw_permissions_by_app(ui, app, ctx, &device_id),
+    }
 }
 
+fn draw_permissions_by_permission(
+    ui: &mut egui::Ui,
+    app: &mut PhoneTvApp,
+    ctx: &egui::Context,
+    device_id: &str,
+) {
+    let groups: &[(&str, &[&str])] = &[
+        ("Camera", &["android.permission.CAMERA"]),
+        ("Microphone", &["android.permission.RECORD_AUDIO"]),
+        (
+            "Localisation",
+            &[
+                "android.permission.ACCESS_FINE_LOCATION",
+                "android.permission.ACCESS_COARSE_LOCATION",
+                "android.permission.ACCESS_BACKGROUND_LOCATION",
+            ],
+        ),
+        (
+            "Contacts",
+            &[
+                "android.permission.READ_CONTACTS",
+                "android.permission.WRITE_CONTACTS",
+            ],
+        ),
+        (
+            "SMS",
+            &[
+                "android.permission.READ_SMS",
+                "android.permission.SEND_SMS",
+            ],
+        ),
+        (
+            "Journal d'appels",
+            &["android.permission.READ_CALL_LOG"],
+        ),
+        (
+            "Stockage",
+            &[
+                "android.permission.READ_EXTERNAL_STORAGE",
+                "android.permission.WRITE_EXTERNAL_STORAGE",
+            ],
+        ),
+        (
+            "Telephone",
+            &["android.permission.READ_PHONE_STATE"],
+        ),
+        (
+            "Calendrier",
+            &[
+                "android.permission.READ_CALENDAR",
+                "android.permission.WRITE_CALENDAR",
+            ],
+        ),
+        ("Capteurs", &["android.permission.BODY_SENSORS"]),
+    ];
+
+    let dark = app.dark_mode;
+
+    egui::ScrollArea::vertical()
+        .max_height(ui.available_height() - 20.0)
+        .show(ui, |ui| {
+            for (group_name, perm_names) in groups {
+                // Collect apps with these permissions granted
+                let mut apps_with_perm: Vec<(String, String, Option<String>)> = Vec::new();
+                for (pkg, perms) in &app.security_permission_cache {
+                    for perm in perms {
+                        if perm_names.contains(&perm.name.as_str()) && perm.granted {
+                            apps_with_perm.push((
+                                pkg.clone(),
+                                perm.name.clone(),
+                                perm.last_used.clone(),
+                            ));
+                        }
+                    }
+                }
+
+                let count = apps_with_perm.len();
+                let header_text = format!("{} ({})", group_name, count);
+
+                egui::CollapsingHeader::new(
+                    egui::RichText::new(header_text).size(14.0).strong(),
+                )
+                .show(ui, |ui| {
+                    if apps_with_perm.is_empty() {
+                        ui.label(
+                            egui::RichText::new("Aucune application")
+                                .small()
+                                .color(theme::text_secondary(dark)),
+                        );
+                    } else {
+                        for (pkg, perm_name, last_used) in &apps_with_perm {
+                            card_frame(dark).show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(pkg).size(12.0),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new("ACCORDE")
+                                            .small()
+                                            .strong()
+                                            .color(theme::success_color()),
+                                    );
+                                    if let Some(used) = last_used {
+                                        ui.label(
+                                            egui::RichText::new(used)
+                                                .small()
+                                                .color(theme::text_secondary(dark)),
+                                        );
+                                    }
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui.small_button("Revoquer").clicked() {
+                                                let tx = app.bg_tx.clone();
+                                                let ctx2 = ctx.clone();
+                                                let dev = device_id.to_string();
+                                                let pkg2 = pkg.clone();
+                                                let perm2 = perm_name.clone();
+                                                std::thread::spawn(move || {
+                                                    let (success, message) =
+                                                        crate::security::permissions::revoke_permission(
+                                                            &dev, &pkg2, &perm2,
+                                                        );
+                                                    let _ = tx.send(BgEvent::AppActionResult {
+                                                        package: pkg2,
+                                                        action: format!("revoke {}", perm2),
+                                                        success,
+                                                        message,
+                                                    });
+                                                    ctx2.request_repaint();
+                                                });
+                                            }
+                                        },
+                                    );
+                                });
+                            });
+                            ui.add_space(2.0);
+                        }
+                    }
+                });
+            }
+        });
+}
+
+fn draw_permissions_by_app(
+    ui: &mut egui::Ui,
+    app: &mut PhoneTvApp,
+    ctx: &egui::Context,
+    device_id: &str,
+) {
+    let dark = app.dark_mode;
+
+    // App selector
+    let app_names: Vec<String> = app
+        .security_apps
+        .iter()
+        .map(|a| a.package.clone())
+        .collect();
+
+    ui.horizontal(|ui| {
+        ui.label("Application:");
+        let current = app
+            .security_selected_app
+            .clone()
+            .unwrap_or_else(|| "-- Choisir --".to_string());
+
+        egui::ComboBox::from_id_salt("perm_app_select")
+            .selected_text(&current)
+            .width(350.0)
+            .show_ui(ui, |ui| {
+                for name in &app_names {
+                    if ui
+                        .selectable_label(
+                            app.security_selected_app.as_deref() == Some(name.as_str()),
+                            name,
+                        )
+                        .clicked()
+                    {
+                        app.security_selected_app = Some(name.clone());
+                        // Load permissions if not cached
+                        if !app.security_permission_cache.contains_key(name) {
+                            let tx = app.bg_tx.clone();
+                            let ctx2 = ctx.clone();
+                            let id = device_id.to_string();
+                            let pkg = name.clone();
+                            std::thread::spawn(move || {
+                                let perms =
+                                    crate::security::permissions::get_app_permissions(
+                                        &id, &pkg,
+                                    );
+                                let _ = tx.send(BgEvent::SecurityPermissions {
+                                    package: pkg,
+                                    permissions: perms,
+                                });
+                                ctx2.request_repaint();
+                            });
+                        }
+                    }
+                }
+            });
+    });
+
+    ui.add_space(8.0);
+
+    // Display permissions for selected app
+    if let Some(ref selected) = app.security_selected_app.clone() {
+        if let Some(perms) = app.security_permission_cache.get(selected) {
+            if perms.is_empty() {
+                ui.label(
+                    egui::RichText::new("Aucune permission runtime")
+                        .color(theme::text_secondary(dark)),
+                );
+            } else {
+                egui::ScrollArea::vertical()
+                    .max_height(ui.available_height() - 20.0)
+                    .show(ui, |ui| {
+                        for perm in perms {
+                            card_frame(dark).show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(&perm.name).size(12.0),
+                                    );
+
+                                    let (status_text, status_color) = if perm.granted {
+                                        ("ACCORDE", theme::success_color())
+                                    } else {
+                                        ("REFUSE", theme::danger_color())
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(status_text)
+                                            .small()
+                                            .strong()
+                                            .color(status_color),
+                                    );
+
+                                    if perm.dangerous {
+                                        ui.label(
+                                            egui::RichText::new("DANGEREUX")
+                                                .small()
+                                                .strong()
+                                                .color(theme::warning_color()),
+                                        );
+                                    }
+
+                                    if let Some(ref used) = perm.last_used {
+                                        ui.label(
+                                            egui::RichText::new(used)
+                                                .small()
+                                                .color(theme::text_secondary(dark)),
+                                        );
+                                    }
+
+                                    if perm.granted {
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if ui.small_button("Revoquer").clicked() {
+                                                    let tx = app.bg_tx.clone();
+                                                    let ctx2 = ctx.clone();
+                                                    let dev = device_id.to_string();
+                                                    let pkg = selected.clone();
+                                                    let perm_name = perm.name.clone();
+                                                    std::thread::spawn(move || {
+                                                        let (success, message) =
+                                                            crate::security::permissions::revoke_permission(
+                                                                &dev, &pkg, &perm_name,
+                                                            );
+                                                        let _ = tx.send(
+                                                            BgEvent::AppActionResult {
+                                                                package: pkg,
+                                                                action: format!(
+                                                                    "revoke {}",
+                                                                    perm_name
+                                                                ),
+                                                                success,
+                                                                message,
+                                                            },
+                                                        );
+                                                        ctx2.request_repaint();
+                                                    });
+                                                }
+                                            },
+                                        );
+                                    }
+                                });
+                            });
+                            ui.add_space(2.0);
+                        }
+                    });
+            }
+        } else {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Chargement des permissions...");
+            });
+        }
+    }
+}
+
+// ── Stubs for remaining views ───────────────────────────────────────
 fn draw_blacklist_stub(ui: &mut egui::Ui, _app: &PhoneTvApp) {
     ui.label(egui::RichText::new("Blacklist — coming soon").italics());
 }
