@@ -213,6 +213,8 @@ fn trigger_apps_load(app: &mut PhoneTvApp, ctx: &egui::Context) {
 }
 
 fn trigger_posture_load(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &str) {
+    if app.security_posture_loading { return; }
+    app.security_posture_loading = true;
     let tx = app.bg_tx.clone();
     let ctx2 = ctx.clone();
     let id = device_id.to_string();
@@ -224,6 +226,8 @@ fn trigger_posture_load(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &s
 }
 
 fn trigger_processes_load(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &str) {
+    if app.security_processes_loading { return; }
+    app.security_processes_loading = true;
     let tx = app.bg_tx.clone();
     let ctx2 = ctx.clone();
     let id = device_id.to_string();
@@ -235,6 +239,8 @@ fn trigger_processes_load(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: 
 }
 
 fn trigger_permissions_load(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &str) {
+    if app.security_permissions_loading { return; }
+    app.security_permissions_loading = true;
     let apps: Vec<String> = app
         .security_apps
         .iter()
@@ -252,6 +258,9 @@ fn trigger_permissions_load(app: &mut PhoneTvApp, ctx: &egui::Context, device_id
             });
             ctx2.request_repaint();
         }
+        // Signal done — clear loading flag via a Log event
+        let _ = tx.send(BgEvent::Log("Permissions chargées".into()));
+        ctx2.request_repaint();
     });
 }
 
@@ -290,25 +299,42 @@ pub fn draw_security(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
     let dark = app.dark_mode;
     let device_selected = app.get_selected_id().is_some();
 
-    // ── Auto-load on entering Security tab ─────────────────────────
+    // ── Auto-load on entering Security tab (once per device) ───────
     if device_selected {
         let current_device = app.get_selected_id();
-        let device_changed = app.security_auto_loaded_device != current_device;
+        let device_changed = app.security_auto_loaded_device.as_ref() != current_device.as_ref();
 
-        if (app.security_apps.is_empty() || device_changed)
-            && !app.security_apps_loading
-        {
-            app.security_auto_loaded_device = current_device;
+        if device_changed {
+            // Reset everything for the new device
+            app.security_auto_loaded_device = current_device.clone();
+            app.security_score = None;
+            app.security_apps.clear();
+            app.security_posture.clear();
+            app.security_permission_cache.clear();
+            app.security_processes.clear();
+            app.security_data_usage.clear();
+            app.security_wakelocks.clear();
+            app.security_posture_loading = false;
+            app.security_processes_loading = false;
+            app.security_permissions_loading = false;
+            app.security_data_usage_loading = false;
+            app.security_wakelocks_loading = false;
+            // Trigger initial loads
             trigger_apps_load(app, ctx);
-        }
-        if (app.security_score.is_none() || device_changed)
-            && !app.security_score_loading
-        {
             trigger_score_load(app, ctx);
-        }
-        if app.security_posture.is_empty() || device_changed {
-            if let Some(id) = app.get_selected_id() {
+            if let Some(id) = current_device {
                 trigger_posture_load(app, ctx, &id);
+            }
+        } else if app.security_apps.is_empty() && !app.security_apps_loading {
+            // First time entering tab — no device change but nothing loaded yet
+            trigger_apps_load(app, ctx);
+            if app.security_score.is_none() && !app.security_score_loading {
+                trigger_score_load(app, ctx);
+            }
+            if app.security_posture.is_empty() && !app.security_posture_loading {
+                if let Some(id) = app.get_selected_id() {
+                    trigger_posture_load(app, ctx, &id);
+                }
             }
         }
     }
@@ -2063,8 +2089,9 @@ fn draw_data_usage(
 ) {
     let dark = app.dark_mode;
 
-    // Auto-load
-    if app.security_data_usage.is_empty() {
+    // Auto-load (with guard)
+    if app.security_data_usage.is_empty() && !app.security_data_usage_loading {
+        app.security_data_usage_loading = true;
         let tx = app.bg_tx.clone();
         let ctx2 = ctx.clone();
         let id = device_id.to_string();
@@ -2168,8 +2195,9 @@ fn draw_wakelocks(
 ) {
     let dark = app.dark_mode;
 
-    // Auto-load
-    if app.security_wakelocks.is_empty() {
+    // Auto-load (with guard)
+    if app.security_wakelocks.is_empty() && !app.security_wakelocks_loading {
+        app.security_wakelocks_loading = true;
         let tx = app.bg_tx.clone();
         let ctx2 = ctx.clone();
         let id = device_id.to_string();

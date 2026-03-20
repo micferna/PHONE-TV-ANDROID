@@ -84,9 +84,14 @@ pub struct PhoneTvApp {
     pub security_selected_app: Option<String>,
     pub security_monitoring_view: MonitoringView,
     pub security_processes: Vec<ProcessInfo>,
+    pub security_processes_loading: bool,
     pub security_data_usage: Vec<DataUsage>,
+    pub security_data_usage_loading: bool,
     pub security_wakelocks: Vec<WakelockInfo>,
+    pub security_wakelocks_loading: bool,
     pub security_posture: Vec<DevicePosture>,
+    pub security_posture_loading: bool,
+    pub security_permissions_loading: bool,
     pub blacklist: Vec<String>,
     pub blacklist_alerts: Vec<String>,
     pub blacklist_new_entry: String,
@@ -158,9 +163,14 @@ impl PhoneTvApp {
             security_selected_app: None,
             security_monitoring_view: MonitoringView::Processes,
             security_processes: Vec::new(),
+            security_processes_loading: false,
             security_data_usage: Vec::new(),
+            security_data_usage_loading: false,
             security_wakelocks: Vec::new(),
+            security_wakelocks_loading: false,
             security_posture: Vec::new(),
+            security_posture_loading: false,
+            security_permissions_loading: false,
             blacklist: config::load_blacklist(),
             blacklist_alerts: Vec::new(),
             blacklist_new_entry: String::new(),
@@ -654,18 +664,26 @@ impl PhoneTvApp {
                 }
                 BgEvent::SecurityProcesses { processes } => {
                     self.security_processes = processes;
+                    self.security_processes_loading = false;
                 }
                 BgEvent::SecurityDataUsage { usage } => {
                     self.security_data_usage = usage;
+                    self.security_data_usage_loading = false;
                 }
                 BgEvent::SecurityWakelocks { wakelocks } => {
                     self.security_wakelocks = wakelocks;
+                    self.security_wakelocks_loading = false;
                 }
                 BgEvent::SecurityPosture { checks } => {
                     self.security_posture = checks;
+                    self.security_posture_loading = false;
                 }
                 BgEvent::SecurityPermissions { package, permissions } => {
                     self.security_permission_cache.insert(package, permissions);
+                    // Clear loading when we have permissions for all known apps
+                    if !self.security_apps.is_empty() && self.security_permission_cache.len() >= self.security_apps.len() {
+                        self.security_permissions_loading = false;
+                    }
                 }
                 BgEvent::BlacklistAlert { found } => {
                     self.blacklist_alerts = found;
