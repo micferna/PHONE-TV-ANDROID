@@ -188,7 +188,7 @@ impl PhoneTvApp {
     pub fn log(&mut self, msg: &str) {
         let now = chrono::Local::now().format("%H:%M:%S").to_string();
         self.logs.push_back(format!("[{}] {}", now, msg));
-        if self.logs.len() > 15 {
+        if self.logs.len() > 50 {
             self.logs.pop_front();
         }
     }
@@ -770,36 +770,72 @@ impl eframe::App for PhoneTvApp {
             });
 
         // Bottom panel: logs
-        egui::TopBottomPanel::bottom("footer").show(ctx, |ui| {
-            ui.add_space(4.0);
+        egui::TopBottomPanel::bottom("footer")
+            .frame(
+                egui::Frame::NONE
+                    .inner_margin(8.0)
+                    .fill(theme::sidebar_fill(self.dark_mode))
+                    .stroke(egui::Stroke::new(1.0, theme::card_border(self.dark_mode))),
+            )
+            .show(ctx, |ui| {
+                let log_count = self.logs.len();
+                ui.horizontal(|ui| {
+                    let arrow = if self.logs_collapsed { "▶" } else { "▼" };
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(format!("{} Logs ({})", arrow, log_count))
+                                    .size(13.0)
+                                    .strong(),
+                            )
+                            .fill(egui::Color32::TRANSPARENT),
+                        )
+                        .clicked()
+                    {
+                        self.logs_collapsed = !self.logs_collapsed;
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("Effacer")
+                                    .size(11.0)
+                                    .color(theme::text_secondary(self.dark_mode)),
+                            )
+                            .fill(egui::Color32::TRANSPARENT),
+                        )
+                        .clicked()
+                    {
+                        self.logs.clear();
+                    }
+                });
 
-            let log_count = self.logs.len();
-            ui.horizontal(|ui| {
-                let arrow = if self.logs_collapsed { "▶" } else { "▼" };
-                if ui
-                    .button(format!("{} Logs ({})", arrow, log_count))
-                    .clicked()
-                {
-                    self.logs_collapsed = !self.logs_collapsed;
-                }
-                if ui.small_button("Clear").clicked() {
-                    self.logs.clear();
+                if !self.logs_collapsed {
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical()
+                        .max_height(140.0)
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            for log in &self.logs {
+                                // Color based on content
+                                let color = if log.contains("✓") {
+                                    theme::success_color()
+                                } else if log.contains("✗") || log.contains("Échec") || log.contains("Erreur") {
+                                    theme::danger_color()
+                                } else if log.contains("⚠") || log.contains("ATTENTION") {
+                                    theme::warning_color()
+                                } else {
+                                    theme::text_primary(self.dark_mode)
+                                };
+                                ui.label(
+                                    egui::RichText::new(log)
+                                        .size(12.0)
+                                        .family(egui::FontFamily::Monospace)
+                                        .color(color),
+                                );
+                            }
+                        });
                 }
             });
-
-            if !self.logs_collapsed {
-                egui::ScrollArea::vertical()
-                    .max_height(60.0)
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        for log in &self.logs {
-                            ui.label(egui::RichText::new(log).small().family(egui::FontFamily::Monospace));
-                        }
-                    });
-            }
-
-            ui.add_space(4.0);
-        });
 
         // Central panel: tab content
         egui::CentralPanel::default().show(ctx, |ui| {
