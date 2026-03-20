@@ -31,7 +31,7 @@ pub fn draw_devices(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context
             if ui
                 .add_enabled(
                     !app.refreshing,
-                    egui::Button::new(refresh_text).fill(theme::ACCENT),
+                    egui::Button::new(refresh_text).fill(theme::accent_color()),
                 )
                 .clicked()
             {
