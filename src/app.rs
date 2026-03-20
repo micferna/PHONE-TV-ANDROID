@@ -92,6 +92,8 @@ pub struct PhoneTvApp {
     pub blacklist_new_entry: String,
     pub confirm_clear_data: Option<String>,
     pub confirm_uninstall: Option<String>,
+    pub security_apps_loaded_count: usize,
+    pub security_auto_loaded_device: Option<String>,
 }
 
 impl PhoneTvApp {
@@ -147,7 +149,7 @@ impl PhoneTvApp {
             security_score_loading: false,
             security_apps: Vec::new(),
             security_apps_filter: AppFilter::All,
-            security_apps_sort: AppSort::Name,
+            security_apps_sort: AppSort::Danger,
             security_apps_search: String::new(),
             security_apps_loading: false,
             security_loading_cancel: Arc::new(AtomicBool::new(false)),
@@ -164,6 +166,8 @@ impl PhoneTvApp {
             blacklist_new_entry: String::new(),
             confirm_clear_data: None,
             confirm_uninstall: None,
+            security_apps_loaded_count: 0,
+            security_auto_loaded_device: None,
         }
     }
 
@@ -636,6 +640,7 @@ impl PhoneTvApp {
                     self.security_score_loading = false;
                 }
                 BgEvent::SecurityAppsList { packages } => {
+                    self.security_apps_loaded_count = 0;
                     self.security_apps = packages
                         .into_iter()
                         .map(|p| AppInfo { package: p, ..Default::default() })
@@ -645,6 +650,7 @@ impl PhoneTvApp {
                     if let Some(app) = self.security_apps.iter_mut().find(|a| a.package == package) {
                         *app = info;
                     }
+                    self.security_apps_loaded_count += 1;
                 }
                 BgEvent::SecurityProcesses { processes } => {
                     self.security_processes = processes;

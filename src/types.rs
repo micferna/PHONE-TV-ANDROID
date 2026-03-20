@@ -109,6 +109,7 @@ pub struct SecurityIssue {
     pub description: String,
     pub severity: Severity,
     pub points: i32,
+    #[allow(dead_code)]
     pub fixable: bool,
     pub fix_command: Option<String>,
 }
@@ -195,6 +196,7 @@ pub enum AppFilter {
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum AppSort {
+    Danger,
     Name,
     InstallDate,
     Source,
