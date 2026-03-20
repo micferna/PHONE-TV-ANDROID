@@ -27,13 +27,13 @@ pub fn check_device_posture(device_id: &str) -> Vec<DevicePosture> {
         });
     }
 
-    // 3. Mode développeur
+    // 3. Mode développeur (required for ADB — never show as Bad)
     if let Some(val) = adb_device(device_id, &["shell", "settings", "get", "global", "development_settings_enabled"]) {
         let trimmed = val.trim();
         checks.push(DevicePosture {
             name: "Mode développeur".into(),
-            value: trimmed.to_string(),
-            status: if trimmed == "1" { PostureStatus::Bad } else { PostureStatus::Good },
+            value: if trimmed == "1" { "Activé (requis pour ADB)".into() } else { trimmed.to_string() },
+            status: if trimmed == "1" { PostureStatus::Warning } else { PostureStatus::Good },
             fix_command: None,
         });
     }

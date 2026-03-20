@@ -592,6 +592,78 @@ fn draw_score(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
                             egui::RichText::new(&issue.description).size(13.0),
                         );
 
+                        // Actionable app list for sideloaded / dangerous_perms issues
+                        if issue.id == "sideloaded" || issue.id == "dangerous_perms" {
+                            if let Some(after_colon) = issue.description.split(": ").nth(1) {
+                                let app_names: Vec<&str> = after_colon.split(", ").collect();
+                                ui.add_space(4.0);
+                                for pkg_name in &app_names {
+                                    let pkg_name = pkg_name.trim();
+                                    if pkg_name.is_empty() { continue; }
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(pkg_name)
+                                                .size(12.0)
+                                                .color(theme::text_primary(dark)),
+                                        );
+                                        if let Some(dev) = app.get_selected_id() {
+                                            let pkg = pkg_name.to_string();
+                                            if ui.add(
+                                                egui::Button::new(
+                                                    egui::RichText::new("Désinstaller")
+                                                        .small()
+                                                        .color(egui::Color32::WHITE),
+                                                )
+                                                .fill(theme::danger_color())
+                                                .corner_radius(4.0),
+                                            ).clicked() {
+                                                app.confirm_uninstall = Some(pkg.clone());
+                                            }
+                                            if ui.add(
+                                                egui::Button::new(
+                                                    egui::RichText::new("Désactiver").small(),
+                                                )
+                                                .corner_radius(4.0),
+                                            ).clicked() {
+                                                let tx = app.bg_tx.clone();
+                                                let ctx2 = ctx.clone();
+                                                let dev2 = dev.clone();
+                                                let pkg2 = pkg.clone();
+                                                std::thread::spawn(move || {
+                                                    let (success, message) =
+                                                        crate::security::apps::disable_app(&dev2, &pkg2);
+                                                    let _ = tx.send(BgEvent::AppActionResult {
+                                                        package: pkg2,
+                                                        action: "disable".into(),
+                                                        success,
+                                                        message,
+                                                    });
+                                                    ctx2.request_repaint();
+                                                });
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                        }
+
+                        // Accessibility services: display as a list (no action possible)
+                        if issue.id == "accessibility" {
+                            if let Some(after_colon) = issue.description.split(": ").nth(1) {
+                                let services: Vec<&str> = after_colon.split(':').collect();
+                                ui.add_space(4.0);
+                                for svc in &services {
+                                    let svc = svc.trim();
+                                    if svc.is_empty() { continue; }
+                                    ui.label(
+                                        egui::RichText::new(format!("  \u{2022} {}", svc))
+                                            .size(12.0)
+                                            .color(theme::text_secondary(dark)),
+                                    );
+                                }
+                            }
+                        }
+
                         // Fix button (prominent)
                         if let Some(ref cmd) = issue.fix_command {
                             ui.add_space(8.0);
@@ -867,15 +939,41 @@ fn draw_apps(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
     });
     ui.add_space(4.0);
 
+    // System apps warning banner
+    if app.security_apps_filter == AppFilter::System {
+        section(ui, dark, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new("\u{26a0}\u{fe0f} Les applications système sont essentielles au fonctionnement du téléphone. Ne désactivez que les apps que vous reconnaissez comme du bloatware.")
+                        .size(13.0)
+                        .color(theme::warning_color()),
+                );
+            });
+        });
+    }
+
     // App list
+    let is_system_filter = app.security_apps_filter == AppFilter::System;
     egui::ScrollArea::vertical()
         .max_height(ui.available_height() - 20.0)
         .show(ui, |ui| {
             for app_info in &display_apps {
-                draw_app_card(ui, app, ctx, app_info, &device_id);
+                draw_app_card(ui, app, ctx, app_info, &device_id, is_system_filter);
                 ui.add_space(4.0);
             }
         });
+}
+
+fn vendor_tag(pkg: &str) -> Option<(&'static str, egui::Color32)> {
+    if pkg.starts_with("com.google.") {
+        Some(("Google", egui::Color32::from_rgb(52, 168, 83)))
+    } else if pkg.starts_with("com.android.") {
+        Some(("Android", egui::Color32::from_rgb(66, 133, 244)))
+    } else if pkg.starts_with("com.samsung.") {
+        Some(("Samsung", egui::Color32::from_rgb(66, 133, 244)))
+    } else {
+        None
+    }
 }
 
 fn draw_app_card(
@@ -884,6 +982,7 @@ fn draw_app_card(
     ctx: &egui::Context,
     info: &AppInfo,
     device_id: &str,
+    is_system_filter: bool,
 ) {
     let dark = app.dark_mode;
     card_frame(dark).show(ui, |ui| {
@@ -893,13 +992,18 @@ fn draw_app_card(
             ui.vertical(|ui| {
                 ui.set_max_width(ui.available_width() - 280.0);
 
-                // Package name (truncated)
-                let display_name = if info.package.len() > 45 {
-                    format!("{}...", &info.package[..42])
-                } else {
-                    info.package.clone()
-                };
-                ui.label(egui::RichText::new(display_name).strong().size(13.0));
+                // Package name (truncated) + vendor tag
+                ui.horizontal(|ui| {
+                    let display_name = if info.package.len() > 45 {
+                        format!("{}...", &info.package[..42])
+                    } else {
+                        info.package.clone()
+                    };
+                    ui.label(egui::RichText::new(display_name).strong().size(13.0));
+                    if let Some((vendor_name, vendor_color)) = vendor_tag(&info.package) {
+                        badge(ui, vendor_name, vendor_color);
+                    }
+                });
 
                 if info.details_loaded {
                     // Version + date on same line
@@ -981,15 +1085,16 @@ fn draw_app_card(
                 let pkg = info.package.clone();
                 let dev = device_id.to_string();
 
-                // Uninstall
+                // Uninstall (disabled for system apps)
                 if ui
-                    .add(
+                    .add_enabled(
+                        !is_system_filter,
                         egui::Button::new(
                             egui::RichText::new("Désinstaller")
                                 .small()
                                 .color(egui::Color32::WHITE),
                         )
-                        .fill(theme::danger_color())
+                        .fill(if is_system_filter { theme::text_dim(dark) } else { theme::danger_color() })
                         .corner_radius(4.0),
                     )
                     .clicked()
@@ -1963,6 +2068,16 @@ fn draw_processes(
 ) {
     let dark = app.dark_mode;
 
+    // Auto-refresh logic
+    if app.security_processes_auto_refresh && !app.security_processes_loading {
+        let now = ui.ctx().input(|i| i.time);
+        if now - app.security_processes_last_refresh >= 3.0 {
+            trigger_processes_load(app, ctx, device_id);
+            app.security_processes_last_refresh = now;
+        }
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+    }
+
     ui.horizontal(|ui| {
         if ui
             .add(
@@ -1976,11 +2091,26 @@ fn draw_processes(
             .clicked()
         {
             trigger_processes_load(app, ctx, device_id);
+            app.security_processes_last_refresh = ui.ctx().input(|i| i.time);
         }
+
+        ui.checkbox(&mut app.security_processes_auto_refresh, "Auto-refresh");
+
         ui.label(
             egui::RichText::new(format!("{} processus", app.security_processes.len()))
                 .color(theme::text_secondary(dark)),
         );
+
+        // Show last refresh time
+        if app.security_processes_last_refresh > 0.0 {
+            let now = ui.ctx().input(|i| i.time);
+            let elapsed = (now - app.security_processes_last_refresh).max(0.0) as u64;
+            ui.label(
+                egui::RichText::new(format!("Dernière MAJ: il y a {}s", elapsed))
+                    .small()
+                    .color(theme::text_secondary(dark)),
+            );
+        }
     });
 
     ui.add_space(8.0);

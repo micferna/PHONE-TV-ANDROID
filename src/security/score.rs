@@ -5,17 +5,16 @@ pub fn calculate_score(device_id: &str) -> (u8, Vec<SecurityIssue>) {
     let mut issues = Vec::new();
     let mut deductions: i32 = 0;
 
-    // 1. Developer mode (-10)
+    // 1. Developer mode (info only — required for this app)
     if let Some(val) = adb_device(device_id, &["shell", "settings", "get", "global", "development_settings_enabled"]) {
         if val.trim() == "1" {
-            deductions += 10;
             issues.push(SecurityIssue {
                 id: "dev_mode".into(),
-                description: "Mode développeur activé".into(),
-                severity: Severity::Warning,
-                points: -10,
-                fixable: true,
-                fix_command: Some("settings put global development_settings_enabled 0".into()),
+                description: "Mode développeur activé (requis pour cette app)".into(),
+                severity: Severity::Info,
+                points: 0,
+                fixable: false,
+                fix_command: None,
             });
         }
     }
