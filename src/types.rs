@@ -83,6 +83,8 @@ pub struct AppInfo {
     pub target_sdk: u32,
     pub enabled: bool,
     pub details_loaded: bool,
+    pub dangerous_perm_count: u32,
+    pub dangerous_perm_names: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

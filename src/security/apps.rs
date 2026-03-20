@@ -94,8 +94,108 @@ pub fn get_app_detail(device_id: &str, package: &str) -> Option<AppInfo> {
         }
     }
 
+    // ── Parse dangerous permissions ──────────────────────────────────
+    let mut dangerous_names: Vec<String> = Vec::new();
+    let mut in_runtime_perms = false;
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with("runtime permissions:") {
+            in_runtime_perms = true;
+            continue;
+        }
+        if in_runtime_perms {
+            // End of section: non-indented line or new section header
+            if !trimmed.is_empty() && !line.starts_with(' ') && !line.starts_with('\t') {
+                in_runtime_perms = false;
+                continue;
+            }
+            if trimmed.contains("granted=true") {
+                let label = perm_to_label(trimmed);
+                if let Some(lbl) = label {
+                    if !dangerous_names.contains(&lbl) {
+                        dangerous_names.push(lbl);
+                    }
+                }
+            }
+        }
+    }
+
+    info.dangerous_perm_count = dangerous_names.len() as u32;
+    info.dangerous_perm_names = dangerous_names;
+
     info.details_loaded = true;
     Some(info)
+}
+
+fn perm_to_label(line: &str) -> Option<String> {
+    let perms: &[(&[&str], &str)] = &[
+        (&["android.permission.CAMERA"], "Caméra"),
+        (&["android.permission.RECORD_AUDIO"], "Micro"),
+        (
+            &[
+                "android.permission.ACCESS_FINE_LOCATION",
+                "android.permission.ACCESS_COARSE_LOCATION",
+                "android.permission.ACCESS_BACKGROUND_LOCATION",
+            ],
+            "Localisation",
+        ),
+        (
+            &[
+                "android.permission.READ_CONTACTS",
+                "android.permission.WRITE_CONTACTS",
+            ],
+            "Contacts",
+        ),
+        (
+            &[
+                "android.permission.READ_SMS",
+                "android.permission.SEND_SMS",
+                "android.permission.RECEIVE_SMS",
+            ],
+            "SMS",
+        ),
+        (
+            &[
+                "android.permission.READ_CALL_LOG",
+                "android.permission.WRITE_CALL_LOG",
+            ],
+            "Journal d'appels",
+        ),
+        (
+            &[
+                "android.permission.READ_PHONE_STATE",
+                "android.permission.CALL_PHONE",
+            ],
+            "Téléphone",
+        ),
+        (
+            &[
+                "android.permission.READ_EXTERNAL_STORAGE",
+                "android.permission.WRITE_EXTERNAL_STORAGE",
+                "android.permission.READ_MEDIA_IMAGES",
+            ],
+            "Stockage",
+        ),
+        (
+            &[
+                "android.permission.READ_CALENDAR",
+                "android.permission.WRITE_CALENDAR",
+            ],
+            "Agenda",
+        ),
+        (&["android.permission.BODY_SENSORS"], "Capteurs"),
+    ];
+
+    for (keys, label) in perms {
+        for key in *keys {
+            if line.contains(key) {
+                return Some(label.to_string());
+            }
+        }
+    }
+    None
 }
 
 pub fn uninstall_app(device_id: &str, package: &str) -> (bool, String) {

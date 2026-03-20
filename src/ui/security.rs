@@ -283,6 +283,8 @@ fn app_danger_score(info: &AppInfo) -> u32 {
     } else if info.target_sdk > 0 && info.target_sdk < 28 {
         score += 1000;
     }
+    // Dangerous permissions
+    score += info.dangerous_perm_count * 100;
     // Disabled apps are less concerning
     if !info.enabled {
         score = score.saturating_sub(500);
@@ -1076,6 +1078,85 @@ fn draw_app_card(
 
                         if !info.enabled {
                             badge(ui, "DÉSACTIVÉ", theme::danger_color());
+                        }
+                    });
+
+                    // ── Permissions badges ─────────────────────────
+                    if info.dangerous_perm_count > 0 {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                egui::RichText::new("\u{1f510}")
+                                    .small(),
+                            );
+                            let high_danger = ["Caméra", "Micro", "Localisation"];
+                            for perm in &info.dangerous_perm_names {
+                                let color = if high_danger.iter().any(|h| *h == perm.as_str()) {
+                                    theme::danger_color()
+                                } else {
+                                    theme::warning_color()
+                                };
+                                badge(ui, perm, color);
+                            }
+                            if info.dangerous_perm_count >= 3 {
+                                badge(ui, "\u{26a0} SUSPECT", theme::danger_color());
+                            }
+                        });
+                    }
+
+                    // ── Collapsible details ────────────────────────
+                    egui::CollapsingHeader::new(
+                        egui::RichText::new("Voir détails").small(),
+                    )
+                    .id_salt(&info.package)
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("Package : {}", info.package))
+                                .small()
+                                .color(theme::text_secondary(dark)),
+                        );
+                        if !info.first_install.is_empty() {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Installé : {}",
+                                    info.first_install
+                                ))
+                                .small()
+                                .color(theme::text_secondary(dark)),
+                            );
+                        }
+                        if !info.last_update.is_empty() {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Mis à jour : {}",
+                                    info.last_update
+                                ))
+                                .small()
+                                .color(theme::text_secondary(dark)),
+                            );
+                        }
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Source : {:?}",
+                                info.installer
+                            ))
+                            .small()
+                            .color(theme::text_secondary(dark)),
+                        );
+                        if !info.dangerous_perm_names.is_empty() {
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new("Permissions dangereuses accordées :")
+                                    .small()
+                                    .strong()
+                                    .color(theme::text_secondary(dark)),
+                            );
+                            for perm in &info.dangerous_perm_names {
+                                ui.label(
+                                    egui::RichText::new(format!("  • {} ✓", perm))
+                                        .small()
+                                        .color(theme::warning_color()),
+                                );
+                            }
                         }
                     });
                 } else {
