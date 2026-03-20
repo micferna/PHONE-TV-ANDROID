@@ -9,9 +9,10 @@ use crate::types::BgEvent;
 
 fn section(ui: &mut egui::Ui, dark_mode: bool, add_contents: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::NONE
-        .corner_radius(10.0)
-        .inner_margin(14.0)
+        .corner_radius(8.0)
+        .inner_margin(12.0)
         .fill(theme::card_bg(dark_mode))
+        .stroke(egui::Stroke::new(0.5, theme::card_border(dark_mode)))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add_contents(ui);
@@ -85,11 +86,7 @@ pub fn draw_tv(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         section_title(ui, "🎮 Télécommande");
 
         let dpad_size = egui::vec2(68.0, 44.0);
-        let dpad_fill = if app.dark_mode {
-            egui::Color32::from_rgb(45, 50, 80)
-        } else {
-            egui::Color32::from_rgb(215, 220, 238)
-        };
+        let dpad_fill = theme::widget_bg(app.dark_mode);
 
         // Use columns: D-pad on left, nav/media/volume on right
         ui.columns(2, |cols| {
@@ -234,11 +231,7 @@ pub fn draw_tv(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         let mut channel_to_delete: Option<usize> = None;
         let cols = 4;
         let btn_size = egui::vec2(120.0, 30.0);
-        let ch_fill = if app.dark_mode {
-            egui::Color32::from_rgb(38, 48, 78)
-        } else {
-            egui::Color32::from_rgb(210, 220, 240)
-        };
+        let ch_fill = theme::widget_bg(app.dark_mode);
 
         egui::Grid::new("channels_grid")
             .spacing([4.0, 4.0])
