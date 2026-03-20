@@ -48,6 +48,7 @@ pub fn draw_devices(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context
             .corner_radius(8.0)
             .inner_margin(10.0)
             .fill(theme::card_bg(app.dark_mode))
+            .stroke(egui::Stroke::new(0.5, theme::card_border(app.dark_mode)))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.label(
@@ -82,6 +83,7 @@ pub fn draw_devices(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context
         .corner_radius(8.0)
         .inner_margin(10.0)
         .fill(theme::card_bg(app.dark_mode))
+        .stroke(egui::Stroke::new(0.5, theme::card_border(app.dark_mode)))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(egui::RichText::new("Connexion manuelle").strong());
@@ -146,7 +148,7 @@ pub fn draw_devices(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context
                 .stroke(if is_selected {
                     egui::Stroke::new(1.5, theme::accent_color())
                 } else {
-                    egui::Stroke::NONE
+                    egui::Stroke::new(0.5, theme::card_border(app.dark_mode))
                 });
 
             frame.show(ui, |ui| {
@@ -182,6 +184,8 @@ pub fn draw_devices(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context
                         );
                     });
                 });
+                // Device ID in monospace dimmed text
+                ui.label(egui::RichText::new(&device.id).size(10.0).family(egui::FontFamily::Monospace).color(theme::text_dim(app.dark_mode)));
             });
             ui.add_space(4.0);
         }
