@@ -53,7 +53,7 @@ pub fn draw_security(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
         SecurityView::Permissions => draw_permissions(ui, app, ctx),
         SecurityView::Blacklist => draw_blacklist(ui, app, ctx),
         SecurityView::Monitoring => draw_monitoring(ui, app, ctx),
-        SecurityView::Posture => draw_posture_stub(ui, app),
+        SecurityView::Posture => draw_posture(ui, app, ctx),
     }
 }
 
@@ -1526,7 +1526,139 @@ fn draw_wakelocks(
         });
 }
 
-// ── Stub for remaining view ─────────────────────────────────────────
-fn draw_posture_stub(ui: &mut egui::Ui, _app: &PhoneTvApp) {
-    ui.label(egui::RichText::new("Device posture — coming soon").italics());
+// ═══════════════════════════════════════════════════════════════════
+// Task 16: Device posture UI
+// ═══════════════════════════════════════════════════════════════════
+fn draw_posture(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
+    let device_id = match app.get_selected_id() {
+        Some(id) => id,
+        None => {
+            ui.label(
+                egui::RichText::new("Selectionnez un appareil.")
+                    .color(theme::text_secondary(app.dark_mode)),
+            );
+            return;
+        }
+    };
+
+    // Auto-load on first visit
+    if app.security_posture.is_empty() {
+        trigger_posture_load(app, ctx, &device_id);
+    }
+
+    // Header with refresh
+    ui.horizontal(|ui| {
+        ui.heading(egui::RichText::new("Posture de l'appareil").size(16.0));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Rafraichir").clicked() {
+                trigger_posture_load(app, ctx, &device_id);
+            }
+        });
+    });
+
+    ui.add_space(8.0);
+
+    if app.security_posture.is_empty() {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label("Chargement...");
+        });
+        return;
+    }
+
+    let dark = app.dark_mode;
+    let posture = app.security_posture.clone();
+
+    // 2-column grid of status cards
+    egui::Grid::new("posture_grid")
+        .num_columns(2)
+        .spacing([12.0, 12.0])
+        .show(ui, |ui| {
+            for (i, check) in posture.iter().enumerate() {
+                card_frame(dark).show(ui, |ui| {
+                    ui.set_min_width(250.0);
+                    ui.horizontal(|ui| {
+                        // Status dot
+                        let dot_color = match check.status {
+                            PostureStatus::Good => theme::success_color(),
+                            PostureStatus::Warning => theme::warning_color(),
+                            PostureStatus::Bad => theme::danger_color(),
+                        };
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(8.0, 8.0),
+                            egui::Sense::hover(),
+                        );
+                        ui.painter().circle_filled(
+                            rect.center(),
+                            4.0,
+                            dot_color,
+                        );
+
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new(&check.name)
+                                    .strong()
+                                    .size(13.0),
+                            );
+                            ui.label(
+                                egui::RichText::new(&check.value)
+                                    .size(12.0)
+                                    .color(theme::text_secondary(dark)),
+                            );
+                        });
+
+                        if check.fix_command.is_some() {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.small_button("Corriger").clicked() {
+                                        let tx = app.bg_tx.clone();
+                                        let ctx2 = ctx.clone();
+                                        let dev = device_id.clone();
+                                        let cmd =
+                                            check.fix_command.clone().unwrap();
+                                        std::thread::spawn(move || {
+                                            let success =
+                                                crate::security::posture::fix_setting(
+                                                    &dev, &cmd,
+                                                );
+                                            let _ = tx.send(BgEvent::Log(format!(
+                                                "Fix {}: {}",
+                                                cmd,
+                                                if success { "OK" } else { "FAIL" }
+                                            )));
+                                            // Refresh posture
+                                            let checks =
+                                                crate::security::posture::check_device_posture(
+                                                    &dev,
+                                                );
+                                            let _ = tx.send(
+                                                BgEvent::SecurityPosture { checks },
+                                            );
+                                            ctx2.request_repaint();
+                                        });
+                                    }
+                                },
+                            );
+                        }
+                    });
+                });
+
+                // End row every 2 items
+                if i % 2 == 1 {
+                    ui.end_row();
+                }
+            }
+        });
+}
+
+fn trigger_posture_load(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &str) {
+    let tx = app.bg_tx.clone();
+    let ctx2 = ctx.clone();
+    let id = device_id.to_string();
+    std::thread::spawn(move || {
+        let checks = crate::security::posture::check_device_posture(&id);
+        let _ = tx.send(BgEvent::SecurityPosture { checks });
+        ctx2.request_repaint();
+    });
 }
