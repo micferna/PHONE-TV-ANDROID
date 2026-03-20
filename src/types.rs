@@ -132,6 +132,7 @@ pub struct ProcessInfo {
 #[derive(Clone, Debug)]
 pub struct DataUsage {
     pub package: String,
+    #[allow(dead_code)]
     pub uid: u32,
     pub wifi_rx: u64,
     pub wifi_tx: u64,

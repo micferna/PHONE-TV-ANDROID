@@ -360,24 +360,6 @@ pub fn get_battery_info(id: &str) -> Option<(u8, String)> {
     level.map(|l| (l, status_str))
 }
 
-pub fn get_third_party_apps(id: &str) -> Vec<String> {
-    adb_device(id, &["shell", "pm", "list", "packages", "-3"])
-        .map(|output| {
-            output
-                .lines()
-                .filter_map(|line| line.strip_prefix("package:").map(|s| s.trim().to_string()))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-pub fn uninstall_app(id: &str, package: &str) -> bool {
-    Command::new("adb")
-        .args(["-s", id, "uninstall", package])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("Success"))
-        .unwrap_or(false)
-}
 
 pub fn ring_phone(id: &str) {
     // Max volume

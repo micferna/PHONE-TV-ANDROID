@@ -82,7 +82,7 @@ fn severity_color(severity: &Severity) -> egui::Color32 {
     match severity {
         Severity::Critical => theme::danger_color(),
         Severity::Warning => theme::warning_color(),
-        Severity::Info => theme::accent_blue(),
+        Severity::Info => theme::accent_purple(),
     }
 }
 
@@ -121,7 +121,7 @@ fn draw_score(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
 
     // Header with refresh button
     ui.horizontal(|ui| {
-        ui.heading(egui::RichText::new("Score de securite").size(18.0));
+        ui.heading(egui::RichText::new("Score de securite").size(18.0).color(theme::text_primary(app.dark_mode)));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let refresh_enabled = !app.security_score_loading;
             if ui
@@ -203,7 +203,18 @@ fn draw_score(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
                                 .strong()
                                 .color(sev_color),
                         );
-                        ui.label(&issue.description);
+                        if issue.fixable {
+                            ui.label(
+                                egui::RichText::new("FIXABLE")
+                                    .small()
+                                    .strong()
+                                    .color(theme::accent_purple()),
+                            );
+                        }
+                        ui.label(
+                            egui::RichText::new(format!("[{}] {}", issue.id, issue.description))
+                                .size(12.0),
+                        );
                         ui.with_layout(
                             egui::Layout::right_to_left(egui::Align::Center),
                             |ui| {
@@ -212,6 +223,28 @@ fn draw_score(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
                                         .small()
                                         .color(theme::text_secondary(app.dark_mode)),
                                 );
+                                if let Some(ref cmd) = issue.fix_command {
+                                    let device_id = app.get_selected_id();
+                                    if let Some(dev) = device_id {
+                                        let cmd = cmd.clone();
+                                        if ui.small_button("Fix").clicked() {
+                                            let tx = app.bg_tx.clone();
+                                            let ctx2 = ctx.clone();
+                                            std::thread::spawn(move || {
+                                                let _ = std::process::Command::new("adb")
+                                                    .args(["-s", &dev, "shell", &cmd])
+                                                    .output();
+                                                let _ = tx.send(BgEvent::AppActionResult {
+                                                    package: "security".into(),
+                                                    action: "fix".into(),
+                                                    success: true,
+                                                    message: "Fix applied".into(),
+                                                });
+                                                ctx2.request_repaint();
+                                            });
+                                        }
+                                    }
+                                }
                             },
                         );
                     });
@@ -780,7 +813,7 @@ fn draw_permissions_by_permission(
         .show(ui, |ui| {
             for (group_name, perm_names) in groups {
                 // Collect apps with these permissions granted
-                let mut apps_with_perm: Vec<(String, String, Option<String>)> = Vec::new();
+                let mut apps_with_perm: Vec<(String, String, Option<String>, bool)> = Vec::new();
                 for (pkg, perms) in &app.security_permission_cache {
                     for perm in perms {
                         if perm_names.contains(&perm.name.as_str()) && perm.granted {
@@ -788,6 +821,7 @@ fn draw_permissions_by_permission(
                                 pkg.clone(),
                                 perm.name.clone(),
                                 perm.last_used.clone(),
+                                perm.is_runtime,
                             ));
                         }
                     }
@@ -807,7 +841,7 @@ fn draw_permissions_by_permission(
                                 .color(theme::text_secondary(dark)),
                         );
                     } else {
-                        for (pkg, perm_name, last_used) in &apps_with_perm {
+                        for (pkg, perm_name, last_used, is_runtime) in &apps_with_perm {
                             card_frame(dark).show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(
@@ -826,31 +860,33 @@ fn draw_permissions_by_permission(
                                                 .color(theme::text_secondary(dark)),
                                         );
                                     }
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            if ui.small_button("Revoquer").clicked() {
-                                                let tx = app.bg_tx.clone();
-                                                let ctx2 = ctx.clone();
-                                                let dev = device_id.to_string();
-                                                let pkg2 = pkg.clone();
-                                                let perm2 = perm_name.clone();
-                                                std::thread::spawn(move || {
-                                                    let (success, message) =
-                                                        crate::security::permissions::revoke_permission(
-                                                            &dev, &pkg2, &perm2,
-                                                        );
-                                                    let _ = tx.send(BgEvent::AppActionResult {
-                                                        package: pkg2,
-                                                        action: format!("revoke {}", perm2),
-                                                        success,
-                                                        message,
+                                    if *is_runtime {
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if ui.small_button("Revoquer").clicked() {
+                                                    let tx = app.bg_tx.clone();
+                                                    let ctx2 = ctx.clone();
+                                                    let dev = device_id.to_string();
+                                                    let pkg2 = pkg.clone();
+                                                    let perm2 = perm_name.clone();
+                                                    std::thread::spawn(move || {
+                                                        let (success, message) =
+                                                            crate::security::permissions::revoke_permission(
+                                                                &dev, &pkg2, &perm2,
+                                                            );
+                                                        let _ = tx.send(BgEvent::AppActionResult {
+                                                            package: pkg2,
+                                                            action: format!("revoke {}", perm2),
+                                                            success,
+                                                            message,
+                                                        });
+                                                        ctx2.request_repaint();
                                                     });
-                                                    ctx2.request_repaint();
-                                                });
-                                            }
-                                        },
-                                    );
+                                                }
+                                            },
+                                        );
+                                    }
                                 });
                             });
                             ui.add_space(2.0);
@@ -969,7 +1005,7 @@ fn draw_permissions_by_app(
                                         );
                                     }
 
-                                    if perm.granted {
+                                    if perm.granted && perm.is_runtime {
                                         ui.with_layout(
                                             egui::Layout::right_to_left(egui::Align::Center),
                                             |ui| {
@@ -1320,7 +1356,7 @@ fn draw_processes(
         .max_height(ui.available_height() - 20.0)
         .show(ui, |ui| {
             egui::Grid::new("processes_grid")
-                .num_columns(5)
+                .num_columns(6)
                 .striped(true)
                 .spacing([12.0, 4.0])
                 .show(ui, |ui| {
@@ -1328,6 +1364,7 @@ fn draw_processes(
                     ui.label(egui::RichText::new("Package").strong());
                     ui.label(egui::RichText::new("PID").strong());
                     ui.label(egui::RichText::new("Memoire").strong());
+                    ui.label(egui::RichText::new("Adj").strong());
                     ui.label(egui::RichText::new("Etat").strong());
                     ui.label(egui::RichText::new("Action").strong());
                     ui.end_row();
@@ -1348,6 +1385,11 @@ fn draw_processes(
                                 proc.memory_kb / 1024
                             ))
                             .size(12.0),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("{}", proc.adj))
+                                .size(12.0)
+                                .color(theme::text_secondary(dark)),
                         );
 
                         let state_color = match proc.state.as_str() {
