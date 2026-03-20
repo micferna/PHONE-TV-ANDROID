@@ -393,6 +393,17 @@ pub fn draw_security(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
         });
     });
 
+    // Confirmation dialogs (global — works from any sub-view)
+    if let Some(ref _pkg) = app.confirm_uninstall.clone() {
+        if let Some(id) = app.get_selected_id() {
+            draw_confirm_dialogs(app, ctx, &id);
+        }
+    } else if let Some(ref _pkg) = app.confirm_clear_data.clone() {
+        if let Some(id) = app.get_selected_id() {
+            draw_confirm_dialogs(app, ctx, &id);
+        }
+    }
+
     // Dispatch to sub-views
     match app.security_view {
         SecurityView::Score => draw_score(ui, app, ctx),
