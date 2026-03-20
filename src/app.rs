@@ -693,8 +693,29 @@ impl PhoneTvApp {
                     self.blacklist_alerts = found;
                 }
                 BgEvent::AppActionResult { package, action, success, message } => {
-                    let status = if success { "OK" } else { "FAIL" };
-                    self.log(&format!("[{}] {} {}: {}", status, action, package, message));
+                    let status = if success { "✓" } else { "✗" };
+                    self.log(&format!("{} {} {} : {}", status, action, package, message));
+                    if success {
+                        match action.as_str() {
+                            "uninstall" => {
+                                self.security_apps.retain(|a| a.package != package);
+                                // Force score refresh
+                                self.security_score = None;
+                                self.security_score_loading = false;
+                            }
+                            "disable" => {
+                                if let Some(a) = self.security_apps.iter_mut().find(|a| a.package == package) {
+                                    a.enabled = false;
+                                }
+                            }
+                            "enable" => {
+                                if let Some(a) = self.security_apps.iter_mut().find(|a| a.package == package) {
+                                    a.enabled = true;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 BgEvent::SecurityAppsLoadingDone => {
                     self.security_apps_loading = false;
