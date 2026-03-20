@@ -816,7 +816,6 @@ impl eframe::App for PhoneTvApp {
                 if !self.logs_collapsed {
                     ui.add_space(4.0);
                     egui::ScrollArea::vertical()
-                        .stick_to_bottom(true)
                         .show(ui, |ui| {
                             for log in &self.logs {
                                 // Color based on content
