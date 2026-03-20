@@ -15,7 +15,7 @@ impl Default for Settings {
         Self {
             dark_mode: true,
             replay_ratio: 12.0,
-            window_size: (900.0, 750.0),
+            window_size: (1000.0, 800.0),
         }
     }
 }
