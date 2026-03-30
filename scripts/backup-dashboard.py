@@ -114,34 +114,43 @@ def llm_analyze(prompt, max_tokens=1000):
 
 
 def llm_deep_scan(num, web_pages_text, contact_name="", sms_samples=None, call_stats=None):
-    """Use LLM to analyze all OSINT data for a number and produce a structured report."""
+    """Use LLM to do real OSINT analysis — cross-reference names, find the real owner."""
     local = "0" + num[3:] if num.startswith("+33") else num
 
-    prompt = f"""Tu es un analyste OSINT. Analyse toutes les données suivantes sur le numéro de téléphone {num} (format local: {local}).
+    prompt = f"""Tu es un enquêteur OSINT professionnel. Tu dois identifier le propriétaire réel du numéro {num} (local: {local}).
 
-CONTEXTE:
-- Contact enregistré sous le nom: {contact_name or '(inconnu)'}
-- {f"Statistiques appels: {json.dumps(call_stats)}" if call_stats else ""}
-- {f"Exemples de SMS récents: {json.dumps(sms_samples[:5], ensure_ascii=False)}" if sms_samples else ""}
+PAGES WEB TROUVÉES POUR CE NUMÉRO:
+{web_pages_text[:5000]}
 
-PAGES WEB MENTIONNANT CE NUMÉRO:
-{web_pages_text[:4000]}
+MISSION:
+1. ANALYSE chaque nom trouvé dans les pages web ci-dessus. Plusieurs noms peuvent apparaître — certains sont d'anciens propriétaires, des homonymes, ou des membres de la même famille.
+2. CROISE les informations: quel nom apparaît le plus souvent ? Quelle adresse est la plus récente ? Y a-t-il des incohérences ?
+3. IDENTIFIE le propriétaire le plus probable du numéro AUJOURD'HUI.
+4. Pour chaque nom trouvé, indique: est-ce le propriétaire actuel, un ancien propriétaire, un membre de la famille, ou un faux positif ?
+5. CHERCHE des indices sur: profession, âge approximatif, ville de résidence, situation (particulier/professionnel).
+6. SIGNALE tout ce qui est suspect: si le numéro est associé à des arnaques, du démarchage, des activités douteuses.
 
-INSTRUCTIONS:
-Réponds en JSON strict avec cette structure:
+{f"Note: dans le téléphone ce contact est enregistré sous: {contact_name}" if contact_name else ""}
+
+Réponds en JSON strict:
 {{
-  "identite_probable": "nom complet le plus probable du propriétaire",
-  "confiance": "haute/moyenne/faible",
-  "adresses": ["liste des adresses trouvées"],
-  "emails": ["emails associés si trouvés"],
-  "profil": "résumé en 2-3 phrases: qui est cette personne, activité probable",
-  "alertes": ["liste d'alertes: spam, arnaque, ou rien"],
-  "sources": ["d'où viennent les infos"],
-  "liens_sociaux": ["profils réseaux sociaux si mentionnés"],
-  "entreprise": "nom d'entreprise si applicable"
-}}
-
-Si tu ne trouves pas d'info fiable, mets null. Ne devine pas, base-toi uniquement sur les données fournies."""
+  "proprietaire_actuel": {{
+    "nom_complet": "Prénom Nom",
+    "confiance": "haute/moyenne/faible",
+    "ville": "ville probable",
+    "indices": "ce qui t'a permis de conclure"
+  }},
+  "autres_noms_trouves": [
+    {{"nom": "Prénom Nom", "relation": "ancien propriétaire / famille / homonyme / faux positif", "adresse": "si trouvée"}}
+  ],
+  "adresses": ["toutes les adresses trouvées avec code postal"],
+  "profil": "2-3 phrases: qui est cette personne, situation, activité",
+  "emails": ["emails trouvés ou null"],
+  "liens_sociaux": ["profils réseaux sociaux mentionnés ou null"],
+  "entreprise": "si lié à une entreprise",
+  "alertes": ["arnaque/spam/suspect ou 'RAS' si rien"],
+  "sources_utilisees": ["URLs des pages analysées"]
+}}"""
 
     result = llm_analyze(prompt, max_tokens=800)
     if not result:
@@ -174,19 +183,36 @@ Si tu ne trouves pas d'info fiable, mets null. Ne devine pas, base-toi uniquemen
     return {"raw_response": result}
 
 
+def _scrape_url(url, timeout=8):
+    """Scrape a URL and return clean text."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"})
+        resp = urllib.request.urlopen(req, timeout=timeout)
+        html = resp.read().decode("utf-8", errors="ignore")
+        text = re.sub(r'<script[^>]*>[\s\S]*?</script>', '', html)
+        text = re.sub(r'<style[^>]*>[\s\S]*?</style>', '', text)
+        text = re.sub(r'<[^>]+>', ' ', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+    except Exception:
+        return ""
+
+
 def deep_scan_number(norm_num):
-    """Run a full deep scan on a number: scrape web + LLM analysis."""
+    """Run a full deep scan: multiple search engines + specific OSINT sites + LLM analysis."""
     import urllib.request
 
     if not _config.get("openrouter_key"):
-        return {"error": "Clé OpenRouter requise — configure-la dans Settings"}
+        return {"error": "Clé OpenRouter requise — configure-la dans ⚙️ Settings"}
 
-    # Gather all web page content
     digits = norm_num[3:] if norm_num.startswith("+33") else norm_num
     local = "0" + digits if len(digits) >= 9 else norm_num
     web_text = ""
+    all_urls = []
 
-    # Search DuckDuckGo
+    # ── Search 1: DuckDuckGo (general) ──
     try:
         sq = urllib.parse.quote(local)
         url = f"https://html.duckduckgo.com/html/?q={sq}"
@@ -194,58 +220,57 @@ def deep_scan_number(norm_num):
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"})
         resp = urllib.request.urlopen(req, timeout=10)
         ddg_html = resp.read().decode("utf-8", errors="ignore")
-
-        # Extract result URLs and scrape top results
-        urls_to_scrape = []
         for m in re.finditer(r'uddg=([^&"]+)', ddg_html):
-            real_url = urllib.parse.unquote(m.group(1))
-            if real_url.startswith("http"):
-                urls_to_scrape.append(real_url)
-
-        for page_url in urls_to_scrape[:5]:
-            try:
-                req2 = urllib.request.Request(page_url, headers={
-                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"})
-                resp2 = urllib.request.urlopen(req2, timeout=8)
-                html = resp2.read().decode("utf-8", errors="ignore")
-                # Clean HTML to text
-                text = re.sub(r'<script[^>]*>[\s\S]*?</script>', '', html)
-                text = re.sub(r'<style[^>]*>[\s\S]*?</style>', '', text)
-                text = re.sub(r'<[^>]+>', ' ', text)
-                text = re.sub(r'\s+', ' ', text).strip()
-                web_text += f"\n\n=== SOURCE: {page_url} ===\n{text[:1500]}"
-            except Exception:
-                pass
+            u = urllib.parse.unquote(m.group(1))
+            if u.startswith("http") and u not in all_urls:
+                all_urls.append(u)
     except Exception:
         pass
 
-    # Get contact name and SMS samples from backup
+    # ── Search 2: DuckDuckGo (nom + numéro si on a un nom de contact) ──
     contact_name = ""
-    sms_samples = []
-    call_stats = None
-
     contacts = _load_latest_export("contacts")
     for c in (contacts or []):
         if normalize_number(c.get("number", "")) == norm_num:
             contact_name = c.get("display_name", "")
             break
 
-    sms_data = _load_latest_export("sms")
-    for s in (sms_data or []):
-        if normalize_number(s.get("address", "")) == norm_num:
-            sms_samples.append({"date": s.get("date"), "type": s.get("type"), "body": s.get("body", "")[:100]})
-            if len(sms_samples) >= 5:
-                break
+    if contact_name and len(contact_name) > 2:
+        try:
+            sq2 = urllib.parse.quote(f"{contact_name} {local}")
+            url2 = f"https://html.duckduckgo.com/html/?q={sq2}"
+            req2 = urllib.request.Request(url2, headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"})
+            resp2 = urllib.request.urlopen(req2, timeout=10)
+            html2 = resp2.read().decode("utf-8", errors="ignore")
+            for m in re.finditer(r'uddg=([^&"]+)', html2):
+                u = urllib.parse.unquote(m.group(1))
+                if u.startswith("http") and u not in all_urls:
+                    all_urls.append(u)
+        except Exception:
+            pass
 
-    calls = _load_latest_export("call_log")
-    call_in = sum(1 for c in (calls or []) if normalize_number(c.get("number", "")) == norm_num and c.get("type") == "incoming")
-    call_out = sum(1 for c in (calls or []) if normalize_number(c.get("number", "")) == norm_num and c.get("type") == "outgoing")
-    call_miss = sum(1 for c in (calls or []) if normalize_number(c.get("number", "")) == norm_num and c.get("type") == "missed")
-    if call_in or call_out or call_miss:
-        call_stats = {"entrants": call_in, "sortants": call_out, "manqués": call_miss}
+    # ── Direct OSINT sites ──
+    direct_sites = [
+        f"https://www.tellows.fr/num/{local}",
+        f"https://www.numeroinverse.fr/numero/{local}",
+        f"https://www.quiappelle.fr/{local}",
+    ]
+    for ds in direct_sites:
+        if ds not in all_urls:
+            all_urls.append(ds)
 
-    # Run LLM analysis
-    result = llm_deep_scan(norm_num, web_text, contact_name, sms_samples, call_stats)
+    # ── Scrape all found URLs ──
+    for page_url in all_urls[:10]:
+        text = _scrape_url(page_url)
+        if text and len(text) > 100:
+            web_text += f"\n\n=== SOURCE: {page_url} ===\n{text[:2000]}"
+
+    if not web_text:
+        return {"error": "Aucune donnée web trouvée pour ce numéro"}
+
+    # ── Run LLM analysis ──
+    result = llm_deep_scan(norm_num, web_text, contact_name)
     if result:
         # Cache the deep scan result
         cache_key = f"deepscan_{norm_num}"
@@ -1705,16 +1730,33 @@ async function deepScan(num,btn){
   btn.disabled=false;btn.textContent='🤖 Deep Scan IA';
   if(r.error){el.innerHTML=`<div class="sec-alert warn">${esc(r.error)}</div>`;return;}
   if(r.raw_response){el.innerHTML=`<div class="card"><div class="lbl">Réponse brute</div><pre style="white-space:pre-wrap;font-size:12px">${esc(r.raw_response)}</pre></div>`;return;}
+  // New format with proprietaire_actuel
+  const owner=r.proprietaire_actuel||{};
+  const others=r.autres_noms_trouves||[];
   el.innerHTML=`<div class="card" style="border:1px solid var(--green);border-left:4px solid var(--green)">
-    <div style="font-size:11px;color:var(--green);font-weight:600;margin-bottom:8px">🤖 ANALYSE IA</div>
-    ${r.identite_probable?`<div style="font-size:18px;font-weight:700;margin-bottom:4px">👤 ${esc(r.identite_probable)}</div><div style="font-size:12px;color:var(--dim);margin-bottom:8px">Confiance: ${esc(r.confiance||'?')}</div>`:''}
-    ${r.profil?`<div style="margin-bottom:8px;font-size:13px">${esc(r.profil)}</div>`:''}
-    ${r.adresses&&r.adresses.length?`<div style="margin-bottom:6px">${r.adresses.filter(a=>a).map(a=>`<div style="font-size:13px">📍 ${esc(a)}</div>`).join('')}</div>`:''}
-    ${r.emails&&r.emails.length?`<div style="margin-bottom:6px">${r.emails.filter(e=>e).map(e=>`<div style="font-size:13px;font-family:monospace">📧 ${esc(e)}</div>`).join('')}</div>`:''}
-    ${r.entreprise?`<div style="margin-bottom:6px;font-size:13px">🏢 ${esc(r.entreprise)}</div>`:''}
-    ${r.liens_sociaux&&r.liens_sociaux.length?`<div style="margin-bottom:6px">${r.liens_sociaux.filter(l=>l).map(l=>`<div style="font-size:13px">🔗 ${esc(l)}</div>`).join('')}</div>`:''}
-    ${r.alertes&&r.alertes.length?`<div style="margin-top:8px">${r.alertes.filter(a=>a).map(a=>`<div class="sec-alert ${a.toLowerCase().includes('rien')||a.toLowerCase().includes('aucun')?'ok':'warn'}">${esc(a)}</div>`).join('')}</div>`:''}
-    ${r.sources&&r.sources.length?`<div style="margin-top:8px;font-size:11px;color:var(--dim)">Sources: ${r.sources.join(', ')}</div>`:''}
+    <div style="font-size:11px;color:var(--green);font-weight:600;margin-bottom:8px">🤖 DEEP SCAN IA</div>
+    ${owner.nom_complet?`
+      <div style="font-size:22px;font-weight:700;margin-bottom:2px">👤 ${esc(owner.nom_complet)}</div>
+      <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+        <span class="dbadge" style="background:${owner.confiance==='haute'?'var(--green-dim)':owner.confiance==='moyenne'?'var(--orange-dim)':'var(--red-dim)'};color:${owner.confiance==='haute'?'var(--green)':owner.confiance==='moyenne'?'var(--orange)':'var(--red)'}">Confiance: ${esc(owner.confiance||'?')}</span>
+        ${owner.ville?`<span class="dbadge" style="background:var(--surface2)">📍 ${esc(owner.ville)}</span>`:''}
+      </div>
+      ${owner.indices?`<div style="font-size:12px;color:var(--dim);margin-bottom:10px;font-style:italic">${esc(owner.indices)}</div>`:''}
+    `:`<div style="color:var(--dim);margin-bottom:8px">Propriétaire non identifié</div>`}
+    ${r.profil?`<div style="margin-bottom:10px;font-size:13px;padding:8px;background:var(--surface2);border-radius:var(--r-sm)">${esc(r.profil)}</div>`:''}
+    ${others.length?`<div style="margin-bottom:10px">
+      <div class="lbl" style="margin-bottom:6px">Autres noms trouvés</div>
+      ${others.filter(o=>o&&o.nom).map(o=>`<div style="padding:6px 8px;margin-bottom:4px;background:var(--surface2);border-radius:var(--r-sm);display:flex;justify-content:space-between">
+        <span><b>${esc(o.nom)}</b> ${o.adresse?`<span style="color:var(--dim);font-size:12px">— ${esc(o.adresse)}</span>`:''}</span>
+        <span class="badge" style="background:var(--surface);font-size:10px">${esc(o.relation||'?')}</span>
+      </div>`).join('')}
+    </div>`:''}
+    ${r.adresses&&r.adresses.filter(a=>a).length?`<div style="margin-bottom:8px">${r.adresses.filter(a=>a).map(a=>`<div style="font-size:13px">📍 ${esc(a)}</div>`).join('')}</div>`:''}
+    ${r.emails&&r.emails.filter(e=>e).length?`<div style="margin-bottom:8px">${r.emails.filter(e=>e).map(e=>`<div style="font-size:13px;font-family:monospace">📧 ${esc(e)}</div>`).join('')}</div>`:''}
+    ${r.entreprise?`<div style="margin-bottom:8px;font-size:13px">🏢 ${esc(r.entreprise)}</div>`:''}
+    ${r.liens_sociaux&&r.liens_sociaux.filter(l=>l).length?`<div style="margin-bottom:8px">${r.liens_sociaux.filter(l=>l).map(l=>`<div style="font-size:13px">🔗 ${esc(l)}</div>`).join('')}</div>`:''}
+    ${r.alertes&&r.alertes.filter(a=>a).length?`<div style="margin-top:8px">${r.alertes.filter(a=>a).map(a=>`<div class="sec-alert ${a.toLowerCase().includes('ras')||a.toLowerCase().includes('aucun')?'ok':'warn'}">${esc(a)}</div>`).join('')}</div>`:''}
+    ${r.sources_utilisees&&r.sources_utilisees.length?`<div style="margin-top:8px;font-size:11px;color:var(--dim)">Sources: ${r.sources_utilisees.map(s=>`<a href="${esc(s)}" target="_blank" style="color:var(--accent)">${esc(s.split('/').slice(2,3).join(''))}</a>`).join(' • ')}</div>`:''}
   </div>`;
 }
 
