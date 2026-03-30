@@ -785,15 +785,17 @@ function analyzeSecurityThreats(cur, neighbors, history){
   }
 
   // 6. Neighbor cell with much stronger signal than serving cell
-  for(const n of neighbors){
-    if(!n.registered && n.rsrp && cur.rsrp && (n.rsrp - cur.rsrp > 15)){
-      alerts.push({level:'warn',msg:`📶 Antenne voisine PCI ${n.pci} a un signal beaucoup plus fort (+${n.rsrp-cur.rsrp}dB) que l'antenne active — possible fausse antenne`});
+  // Filter out Android's "unknown" sentinel value (2147483647 / 0x7FFFFFFF)
+  const validNeighbors=neighbors.filter(n=>n.rsrp&&n.rsrp>-200&&n.rsrp<0);
+  for(const n of validNeighbors){
+    if(!n.registered && cur.rsrp && cur.rsrp>-200 && (n.rsrp - cur.rsrp > 15)){
+      alerts.push({level:'warn',msg:`📶 Antenne voisine PCI ${n.pci} a un signal plus fort (+${n.rsrp-cur.rsrp}dB) que l'antenne active — possible fausse antenne`});
       break;
     }
   }
 
-  // 7. Cell with no encryption indicator (would need more data, flag if missing info)
-  if(neighbors.some(n=>n.cid===null && n.rsrp>-90)){
+  // 7. Cell with no CID but valid strong signal (not sentinel values)
+  if(validNeighbors.some(n=>n.cid===null && n.rsrp>-90)){
     alerts.push({level:'warn',msg:'❓ Antenne voisine sans Cell ID avec fort signal — pourrait être un IMSI catcher non identifié'});
   }
 
@@ -855,24 +857,27 @@ async function pollLocation(){
     `;
   }
 
-  // Neighbors table
+  // Neighbors table — filter out sentinel values
+  const INV=2147483647;
   document.getElementById('loc-neighbors').innerHTML=neighbors.map(n=>{
     const reg=n.registered;
-    const sigColor=n.rsrp>-90?'var(--green)':n.rsrp>-110?'var(--orange)':'var(--red)';
-    const bars='▂▄▆█'.slice(0,Math.max(1,(n.level||0)+1));
+    const rsrp=(n.rsrp&&n.rsrp>-200&&n.rsrp<0)?n.rsrp:null;
+    const sigColor=rsrp?(rsrp>-90?'var(--green)':rsrp>-110?'var(--orange)':'var(--red)'):'var(--dim)';
+    const bars=rsrp?'▂▄▆█'.slice(0,Math.max(1,(n.level||0)+1)):'-';
     // Security check per cell
     let secIcon='✅';
-    if(n.cid===null && n.rsrp>-90) secIcon='⚠️';
-    if(cur && n.rsrp && cur.rsrp && (n.rsrp-cur.rsrp>15) && !n.registered) secIcon='🔶';
-    const earfcnBand=n.earfcn<600?'B1':n.earfcn<1200?'B3':n.earfcn<1950?'B7':n.earfcn<3800?'B8':n.earfcn<6150?'B20':'B28';
+    if(n.cid===null && rsrp && rsrp>-90) secIcon='⚠️';
+    if(cur && rsrp && cur.rsrp && cur.rsrp>-200 && (rsrp-cur.rsrp>15) && !n.registered) secIcon='🔶';
+    const earfcn=(n.earfcn&&n.earfcn<INV)?n.earfcn:null;
+    const earfcnBand=earfcn?(earfcn<600?'B1':earfcn<1200?'B3':earfcn<1950?'B7':earfcn<3800?'B8':earfcn<6150?'B20':'B28'):'-';
     return `<tr style="${reg?'background:var(--accent-dim)':''}">
       <td>${reg?'<span class="badge b-recv">Active</span>':'<span style="color:var(--dim)">Voisine</span>'}</td>
       <td style="font-family:monospace;font-size:12px">${n.cid||'-'}</td>
       <td>${n.cid?n.cid>>8:'-'}</td>
       <td>${n.pci}</td>
-      <td>${earfcnBand} <span style="color:var(--dim);font-size:11px">(${n.earfcn})</span></td>
-      <td style="color:${sigColor};font-weight:600">${n.rsrp}dBm</td>
-      <td>${bars} <span style="color:var(--dim)">${n.level}/4</span></td>
+      <td>${earfcnBand} ${earfcn?`<span style="color:var(--dim);font-size:11px">(${earfcn})</span>`:''}</td>
+      <td style="color:${sigColor};font-weight:600">${rsrp?rsrp+'dBm':'-'}</td>
+      <td>${bars} ${rsrp?`<span style="color:var(--dim)">${n.level}/4</span>`:''}</td>
       <td>${secIcon}</td>
     </tr>`;
   }).join('');
@@ -901,11 +906,36 @@ async function pollLocation(){
     </tr>`;
   }).join('');
 
-  // Init map
+  // Map
   initMap();
-  // We can't resolve cell tower coordinates without an API, but we show the map
-  // ready for when GPS data becomes available (from future photos with EXIF GPS)
   setTimeout(()=>locMap.invalidateSize(),100);
+
+  // Plot position if we have geo data
+  const geo=data.geo;
+  if(geo&&geo.lat&&geo.lng){
+    // Clear old markers
+    locMarkers.forEach(m=>locMap.removeLayer(m));
+    locMarkers=[];
+
+    // Position marker
+    const marker=L.circleMarker([geo.lat,geo.lng],{
+      radius:10,color:'#7c8aff',fillColor:'#7c8aff',fillOpacity:0.8,weight:2
+    }).addTo(locMap);
+    marker.bindPopup(`<b>Position estimée</b><br>📡 CID ${cur?cur.cid:'-'}<br>📍 ${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}<br>🎯 Précision: ~${Math.round(geo.accuracy||0)}m`);
+    locMarkers.push(marker);
+
+    // Accuracy circle
+    if(geo.accuracy){
+      const circle=L.circle([geo.lat,geo.lng],{
+        radius:geo.accuracy,color:'#7c8aff',fillColor:'#7c8aff',
+        fillOpacity:0.08,weight:1,dashArray:'4'
+      }).addTo(locMap);
+      locMarkers.push(circle);
+    }
+
+    // Center map on position
+    locMap.setView([geo.lat,geo.lng],15);
+  }
 }
 
 // ── Live ──
@@ -1424,6 +1454,38 @@ def get_cell_tower_history():
     return {"current": current, "history": history, "neighbors": neighbors}
 
 
+def geolocate_cells(mcc, mnc, cells):
+    """Try to geolocate cell towers using Google's geolocation API (free with limits)."""
+    # Build request with multiple cell towers for triangulation
+    cell_towers = []
+    for c in cells:
+        cid = c.get("cid")
+        if not cid or cid >= 2147483647:
+            continue
+        cell_towers.append({
+            "cellId": cid,
+            "locationAreaCode": c.get("tac", 0),
+            "mobileCountryCode": mcc,
+            "mobileNetworkCode": mnc,
+        })
+    if not cell_towers:
+        return None
+
+    import urllib.request
+
+    # Method 1: Try ip-api.com (free, no key needed, gives approximate location)
+    try:
+        resp = urllib.request.urlopen("http://ip-api.com/json/?fields=lat,lon,accuracy,city,isp", timeout=5)
+        result = json.loads(resp.read())
+        if result.get("lat"):
+            return {"lat": result["lat"], "lng": result["lon"], "accuracy": 2000,
+                    "source": "ip", "city": result.get("city", "")}
+    except Exception:
+        pass
+
+    return None
+
+
 def get_live_location():
     """Get current location + cell + WiFi info."""
     cell_data = get_cell_tower_history()
@@ -1448,9 +1510,17 @@ def get_live_location():
     except Exception:
         pass
 
+    # Try to geolocate using cell towers
+    geo = None
+    cur = cell_data.get("current")
+    if cur:
+        all_cells = [cur] + [n for n in cell_data.get("neighbors", []) if n.get("cid")]
+        geo = geolocate_cells(cur.get("mcc", 208), cur.get("mnc", 15), all_cells)
+
     return {
         "cell": cell_data,
         "wifi": wifi,
+        "geo": geo,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
