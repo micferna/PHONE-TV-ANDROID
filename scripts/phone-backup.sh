@@ -163,79 +163,160 @@ sync_files() {
 export_sms() {
     log "Exporting SMS..."
 
-    local raw
-    raw=$(adb -s "$DEVICE_SERIAL" shell content query --uri content://sms 2>/dev/null || echo "")
-
-    if [ -z "$raw" ]; then
-        log "  No SMS data or access denied"
-        return
-    fi
-
     local json_file="$EXPORTS_DIR/sms_${TODAY}.json"
     local csv_file="$EXPORTS_DIR/sms_${TODAY}.csv"
-    local count=0
 
-    echo "[" > "$json_file"
-    local first=true
+    # Use projection for clean field separation, pipe through a python one-liner
+    # that reliably parses the content query output
+    adb -s "$DEVICE_SERIAL" shell content query --uri content://sms --projection _id:address:body:date:type:read 2>/dev/null | \
+    python3 -c "
+import sys, json, re
+from datetime import datetime
 
-    while IFS= read -r line; do
-        if [[ "$line" != Row:* ]]; then
-            continue
-        fi
+msgs = []
+for line in sys.stdin:
+    line = line.strip()
+    if not line.startswith('Row:'):
+        continue
+    # Parse key=value pairs — body can contain commas so we parse carefully
+    m = {}
+    # Extract simple numeric fields first
+    for key in ('_id', 'date', 'type', 'read'):
+        match = re.search(key + r'=(\d+)', line)
+        if match:
+            m[key] = match.group(1)
+    # Extract address
+    match = re.search(r'address=([^,]+)', line)
+    if match:
+        m['address'] = match.group(1).strip()
+    # Extract body: everything between 'body=' and ', date=' (or ', type=')
+    match = re.search(r'body=(.*?)(?:, date=|, type=|, read=)', line)
+    if match:
+        m['body'] = match.group(1).strip()
+    else:
+        m['body'] = ''
 
-        local date_val="" address="" body="" type_val="" read_val=""
+    date_ms = int(m.get('date', 0))
+    try:
+        date_str = datetime.fromtimestamp(date_ms / 1000).strftime('%Y-%m-%d %H:%M:%S')
+    except:
+        date_str = str(date_ms)
 
-        if [[ "$line" =~ date=([0-9]+) ]]; then
-            date_val="${BASH_REMATCH[1]}"
-        fi
-        if [[ "$line" =~ address=([^,]+) ]]; then
-            address="${BASH_REMATCH[1]}"
-            address="${address## }"
-        fi
-        if [[ "$line" =~ body=(.*),\ read= ]]; then
-            body="${BASH_REMATCH[1]}"
-        fi
-        if [[ "$line" =~ type=([0-9]+) ]]; then
-            type_val="${BASH_REMATCH[1]}"
-        fi
-        if [[ "$line" =~ read=([0-9]+) ]]; then
-            read_val="${BASH_REMATCH[1]}"
-        fi
+    type_map = {'1': 'received', '2': 'sent', '3': 'draft', '4': 'outbox'}
+    msgs.append({
+        'date': date_str,
+        'date_epoch_ms': date_ms,
+        'address': m.get('address', ''),
+        'body': m.get('body', ''),
+        'type': type_map.get(m.get('type', ''), 'unknown'),
+        'read': int(m.get('read', 0))
+    })
 
-        local date_human=""
-        if [ -n "$date_val" ]; then
-            date_human=$(date -d "@$(( date_val / 1000 ))" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$date_val")
-        fi
+json.dump(msgs, open('$json_file', 'w'), ensure_ascii=False, indent=1)
+print(len(msgs))
+" 2>/dev/null
+    local count
+    count=$(jq length "$json_file" 2>/dev/null || echo 0)
 
-        local type_label="unknown"
-        case "$type_val" in
-            1) type_label="received" ;;
-            2) type_label="sent" ;;
-            3) type_label="draft" ;;
-            4) type_label="outbox" ;;
-        esac
-
-        local body_escaped
-        body_escaped=$(printf '%s' "$body" | jq -Rs '.' 2>/dev/null || echo "\"\"")
-
-        if [ "$first" = true ]; then
-            first=false
-        else
-            echo "," >> "$json_file"
-        fi
-
-        cat >> "$json_file" <<JSONEOF
-  {"date": "$date_human", "date_epoch_ms": ${date_val:-0}, "address": "$address", "body": $body_escaped, "type": "$type_label", "read": ${read_val:-0}}
-JSONEOF
-        count=$(( count + 1 ))
-    done <<< "$raw"
-
-    echo "]" >> "$json_file"
-
+    # CSV
     echo "date,address,body,type,read" > "$csv_file"
     jq -r '.[] | [.date, .address, (.body | gsub(","; " ") | gsub("\n"; " ")), .type, .read] | @csv' "$json_file" >> "$csv_file" 2>/dev/null
 
     log "  SMS exported: $count messages"
+}
+
+# ── Apps Export ─────────────────────────────────────────────────────
+export_apps() {
+    log "Exporting installed apps..."
+
+    local json_file="$EXPORTS_DIR/apps_${TODAY}.json"
+
+    adb -s "$DEVICE_SERIAL" shell pm list packages -3 -f 2>/dev/null | \
+    python3 -c "
+import sys, json, subprocess
+
+apps = []
+for line in sys.stdin:
+    line = line.strip()
+    if not line.startswith('package:'):
+        continue
+    # format: package:/path/to.apk=com.package.name
+    rest = line[8:]  # strip 'package:'
+    if '=' in rest:
+        path, pkg = rest.rsplit('=', 1)
+    else:
+        pkg = rest
+        path = ''
+    apps.append({'package': pkg.strip(), 'path': path.strip()})
+
+json.dump(sorted(apps, key=lambda a: a['package']), open('$json_file', 'w'), ensure_ascii=False, indent=1)
+print(len(apps))
+" 2>/dev/null
+
+    local count
+    count=$(jq length "$json_file" 2>/dev/null || echo 0)
+    log "  Apps exported: $count packages"
+}
+
+# ── Device Info Export ──────────────────────────────────────────────
+export_device_info() {
+    log "Exporting device info..."
+
+    local json_file="$EXPORTS_DIR/device_info_${TODAY}.json"
+
+    python3 -c "
+import subprocess, json
+
+def adb_prop(prop):
+    try:
+        r = subprocess.run(['adb', '-s', '$DEVICE_SERIAL', 'shell', 'getprop', prop],
+                           capture_output=True, text=True, timeout=5)
+        return r.stdout.strip()
+    except:
+        return ''
+
+def adb_cmd(args):
+    try:
+        r = subprocess.run(['adb', '-s', '$DEVICE_SERIAL'] + args,
+                           capture_output=True, text=True, timeout=10)
+        return r.stdout.strip()
+    except:
+        return ''
+
+# Battery
+battery = {}
+for line in adb_cmd(['shell', 'dumpsys', 'battery']).splitlines():
+    line = line.strip()
+    if ':' in line:
+        k, v = line.split(':', 1)
+        battery[k.strip().lower()] = v.strip()
+
+# Storage
+storage = {}
+df_out = adb_cmd(['shell', 'df', '/data'])
+for line in df_out.splitlines()[1:]:
+    parts = line.split()
+    if len(parts) >= 4:
+        storage = {'total': parts[1], 'used': parts[2], 'available': parts[3], 'percent': parts[4] if len(parts)>4 else ''}
+
+info = {
+    'model': adb_prop('ro.product.model'),
+    'brand': adb_prop('ro.product.brand'),
+    'android_version': adb_prop('ro.build.version.release'),
+    'sdk': adb_prop('ro.build.version.sdk'),
+    'serial': '$DEVICE_SERIAL',
+    'battery_level': battery.get('level', ''),
+    'battery_status': battery.get('status', ''),
+    'storage': storage,
+    'security_patch': adb_prop('ro.build.version.security_patch'),
+    'build_date': adb_prop('ro.build.date'),
+}
+
+json.dump(info, open('$json_file', 'w'), ensure_ascii=False, indent=2)
+print('OK')
+" 2>/dev/null
+
+    log "  Device info exported"
 }
 
 # ── Contacts Export ─────────────────────────────────────────────────
@@ -427,6 +508,8 @@ main() {
     export_sms
     export_contacts
     export_call_log
+    export_apps
+    export_device_info
     maybe_archive
 
     log "DONE: $TODAY — files_copied=$files_copied errors=$errors"
