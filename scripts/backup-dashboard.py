@@ -34,34 +34,83 @@ _config = load_config()
 
 
 # ── LLM Analysis via OpenRouter ─────────────────────────────────────
+def get_openrouter_models():
+    """Fetch available models from OpenRouter API."""
+    import urllib.request
+    try:
+        req = urllib.request.Request("https://openrouter.ai/api/v1/models",
+                                     headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=10)
+        all_models = json.loads(resp.read()).get("data", [])
+
+        result = {"free": [], "cheap": []}
+        for m in all_models:
+            mid = m.get("id", "")
+            name = m.get("name", mid)
+            prompt_price = float(m.get("pricing", {}).get("prompt", "999") or "999")
+            ctx = m.get("context_length", 0)
+
+            if ":free" in mid or prompt_price == 0:
+                result["free"].append({"id": mid, "name": name, "context": ctx})
+            elif prompt_price < 0.001:  # Very cheap
+                result["cheap"].append({"id": mid, "name": name, "context": ctx,
+                                        "price": f"${prompt_price}/1k tok"})
+
+        result["free"].sort(key=lambda x: x.get("context", 0), reverse=True)
+        result["cheap"].sort(key=lambda x: x.get("context", 0), reverse=True)
+        return result
+    except Exception as e:
+        return {"error": str(e)}
+
+
+FALLBACK_MODELS = [
+    "nousresearch/hermes-3-llama-3.1-405b:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+    "google/gemma-3-27b-it:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "qwen/qwen3-next-80b-a3b-instruct:free",
+    "openai/gpt-oss-120b:free",
+]
+
+
 def llm_analyze(prompt, max_tokens=1000):
-    """Call OpenRouter API with any available model."""
+    """Call OpenRouter API — tries preferred model then fallbacks."""
     api_key = _config.get("openrouter_key", "")
     if not api_key:
         return None
-    model = _config.get("openrouter_model", "mistralai/mistral-small-3.1-24b-instruct:free")
 
     import urllib.request
-    try:
-        payload = json.dumps({
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
-            "temperature": 0.1,
-        }).encode()
-        req = urllib.request.Request(
-            "https://openrouter.ai/api/v1/chat/completions",
-            data=payload,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "http://localhost:8042",
-            })
-        resp = urllib.request.urlopen(req, timeout=30)
-        data = json.loads(resp.read())
-        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
-    except Exception as e:
-        return f"Erreur LLM: {e}"
+
+    # Build model list: preferred first, then fallbacks
+    preferred = _config.get("openrouter_model", FALLBACK_MODELS[0])
+    models = [preferred] + [m for m in FALLBACK_MODELS if m != preferred]
+
+    for model in models:
+        try:
+            payload = json.dumps({
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                "temperature": 0.1,
+            }).encode()
+            req = urllib.request.Request(
+                "https://openrouter.ai/api/v1/chat/completions",
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "http://localhost:8042",
+                })
+            resp = urllib.request.urlopen(req, timeout=45)
+            data = json.loads(resp.read())
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if content:
+                return content
+        except Exception:
+            continue  # Try next model
+
+    return "Erreur: aucun modèle disponible (tous rate-limités)"
 
 
 def llm_deep_scan(num, web_pages_text, contact_name="", sms_samples=None, call_stats=None):
@@ -98,12 +147,28 @@ Si tu ne trouves pas d'info fiable, mets null. Ne devine pas, base-toi uniquemen
     if not result:
         return None
 
-    # Parse JSON from LLM response
+    # Parse JSON from LLM response — try multiple extraction methods
     try:
-        # Extract JSON block if wrapped in markdown
-        json_match = re.search(r'\{[\s\S]*\}', result)
+        # Method 1: direct JSON parse
+        return json.loads(result)
+    except Exception:
+        pass
+    try:
+        # Method 2: extract JSON block from markdown ```json ... ```
+        json_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', result)
         if json_match:
-            return json.loads(json_match.group())
+            return json.loads(json_match.group(1))
+    except Exception:
+        pass
+    try:
+        # Method 3: find the outermost { } pair
+        start = result.index('{')
+        depth = 0
+        for i in range(start, len(result)):
+            if result[i] == '{': depth += 1
+            elif result[i] == '}': depth -= 1
+            if depth == 0:
+                return json.loads(result[start:i + 1])
     except Exception:
         pass
     return {"raw_response": result}
@@ -606,11 +671,9 @@ tr:hover td { background:var(--surface2); }
         <div style="margin-top:6px">
           <div class="lbl">Modèle</div>
           <select id="cfg-model" class="search" style="margin:0;padding:8px">
-            <option value="mistralai/mistral-small-3.1-24b-instruct:free">Mistral Small 3.1 (gratuit)</option>
-            <option value="meta-llama/llama-4-scout:free">Llama 4 Scout (gratuit)</option>
-            <option value="google/gemini-2.5-flash-preview:free">Gemini 2.5 Flash (gratuit)</option>
-            <option value="anthropic/claude-sonnet-4">Claude Sonnet 4 (payant)</option>
+            <option value="">Chargement des modèles...</option>
           </select>
+          <button onclick="loadModels()" style="margin-top:4px;padding:4px 12px;border-radius:var(--r-sm);background:var(--surface2);color:var(--text);border:1px solid var(--border);cursor:pointer;font-size:11px">🔄 Rafraîchir la liste</button>
         </div>
       </div>
     </div>
@@ -1685,6 +1748,27 @@ async function renderGraph(){
   });
 }
 
+// ── Models loader ──
+async function loadModels(){
+  const select=document.getElementById('cfg-model');
+  select.innerHTML='<option value="">⏳ Chargement...</option>';
+  const data=await f('/api/openrouter/models');
+  if(!data||data.error){select.innerHTML='<option value="">Erreur chargement</option>';return;}
+  let html='<optgroup label="🆓 Gratuits">';
+  (data.free||[]).forEach(m=>{
+    html+=`<option value="${m.id}">${m.name} (ctx:${Math.round(m.context/1000)}k)</option>`;
+  });
+  html+='</optgroup><optgroup label="💰 Très peu cher">';
+  (data.cheap||[]).slice(0,15).forEach(m=>{
+    html+=`<option value="${m.id}">${m.name} — ${m.price}</option>`;
+  });
+  html+='</optgroup>';
+  const currentModel=_config?.openrouter_model||'';
+  select.innerHTML=html;
+  if(currentModel)select.value=currentModel;
+}
+let _config=null;
+
 // ── Settings ──
 async function saveConfig(){
   const cfg={
@@ -1726,11 +1810,15 @@ function updateSourcesList(){
 init();
 // Load settings state
 fetch('/api/config').then(r=>r.json()).then(cfg=>{
+  _config=cfg;
   if(cfg.opencellid_key&&cfg.opencellid_key!=='***')document.getElementById('cfg-opencellid').value=cfg.opencellid_key;
   if(cfg.numverify_key&&cfg.numverify_key!=='***')document.getElementById('cfg-numverify').value=cfg.numverify_key;
   if(cfg.intelx_key&&cfg.intelx_key!=='***')document.getElementById('cfg-intelx').value=cfg.intelx_key;
   if(cfg.openrouter_key&&cfg.openrouter_key!=='***')document.getElementById('cfg-openrouter').value=cfg.openrouter_key;
-  if(cfg.openrouter_model)document.getElementById('cfg-model').value=cfg.openrouter_model;
+  // Load models from API then set current
+  loadModels().then(()=>{
+    if(cfg.openrouter_model)document.getElementById('cfg-model').value=cfg.openrouter_model;
+  });
   updateSourcesList();
 }).catch(()=>{updateSourcesList();});
 </script>
@@ -2837,6 +2925,7 @@ class BackupHandler(http.server.BaseHTTPRequestHandler):
             "/api/location/extract": lambda: self._json({"count": len(extract_all_locations())}),
             "/api/config": lambda: self._json({k: ("***" if "key" in k and v else v) for k, v in _config.items()}),
             "/api/osint/deepscan": lambda: self._json(deep_scan_number(query.get("num", [""])[0])),
+            "/api/openrouter/models": lambda: self._json(get_openrouter_models()),
             "/api/graph": lambda: self._json(build_relationship_graph(
                 self._load_export("sms"), self._load_export("call_log"), self._load_export("contacts"))),
         }
