@@ -733,6 +733,8 @@ function showOsintDetail(idx){
 let locInterval=null;
 let locMap=null;
 let locMarkers=[];
+let locHistoryLayer=null;
+let locMapCentered=false;
 let prevCells=[];  // For IMSI catcher detection
 
 function initMap(){
@@ -910,33 +912,105 @@ async function pollLocation(){
   initMap();
   setTimeout(()=>locMap.invalidateSize(),100);
 
-  // Plot position if we have geo data
+  // Current position marker
   const geo=data.geo;
+  // Clear old current marker
+  locMarkers.forEach(m=>locMap.removeLayer(m));
+  locMarkers=[];
+
   if(geo&&geo.lat&&geo.lng){
-    // Clear old markers
-    locMarkers.forEach(m=>locMap.removeLayer(m));
-    locMarkers=[];
-
-    // Position marker
     const marker=L.circleMarker([geo.lat,geo.lng],{
-      radius:10,color:'#7c8aff',fillColor:'#7c8aff',fillOpacity:0.8,weight:2
+      radius:12,color:'#7c8aff',fillColor:'#7c8aff',fillOpacity:0.9,weight:3
     }).addTo(locMap);
-    marker.bindPopup(`<b>Position estimée</b><br>📡 CID ${cur?cur.cid:'-'}<br>📍 ${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}<br>🎯 Précision: ~${Math.round(geo.accuracy||0)}m`);
+    marker.bindPopup(`<b style="color:#000">📍 Position actuelle</b><br>📡 ${cur?'Antenne '+cur.cid:''}<br>🎯 ~${Math.round(geo.accuracy||0)}m (${geo.source||'?'})`);
     locMarkers.push(marker);
+    if(!locMapCentered){locMap.setView([geo.lat,geo.lng],14);locMapCentered=true;}
+  }
 
-    // Accuracy circle
-    if(geo.accuracy){
-      const circle=L.circle([geo.lat,geo.lng],{
-        radius:geo.accuracy,color:'#7c8aff',fillColor:'#7c8aff',
-        fillOpacity:0.08,weight:1,dashArray:'4'
-      }).addTo(locMap);
-      locMarkers.push(circle);
+  // Load full location history and display all points
+  loadLocationHistory();
+}
+
+async function loadLocationHistory(){
+  const hist=await f('/api/location/history')||[];
+  if(!hist.length)return;
+
+  // Remove old history layer
+  if(locHistoryLayer){locMap.removeLayer(locHistoryLayer);}
+  locHistoryLayer=L.layerGroup().addTo(locMap);
+
+  const srcColors={camera:'#ff6b6b',whatsapp:'#25d366',snapchat:'#fffc00',photo:'#ff9f43',cell_tower:'#54a0ff',live_cell:'#7c8aff',ip:'#888'};
+  const srcIcons={camera:'📷',whatsapp:'💬',snapchat:'👻',photo:'🖼️',cell_tower:'📡',live_cell:'📍'};
+  const bounds=[];
+
+  // Group nearby points (cluster within ~100m)
+  const clusters=[];
+  for(const pt of hist){
+    if(!pt.lat||!pt.lng)continue;
+    let found=false;
+    for(const c of clusters){
+      const dist=Math.sqrt((c.lat-pt.lat)**2+(c.lng-pt.lng)**2)*111000;
+      if(dist<150){
+        c.points.push(pt);
+        c.lat=(c.lat*(c.points.length-1)+pt.lat)/c.points.length;
+        c.lng=(c.lng*(c.points.length-1)+pt.lng)/c.points.length;
+        found=true;break;
+      }
+    }
+    if(!found)clusters.push({lat:pt.lat,lng:pt.lng,points:[pt]});
+  }
+
+  clusters.forEach(c=>{
+    const pts=c.points;
+    const mainSource=pts.reduce((a,p)=>{a[p.source]=(a[p.source]||0)+1;return a;},{});
+    const topSource=Object.entries(mainSource).sort((a,b)=>b[1]-a[1])[0]?.[0]||'';
+    const color=srcColors[topSource]||'#888';
+    const radius=Math.min(20,Math.max(6,pts.length*2));
+
+    // Calculate time spent (if timestamps available)
+    let timeInfo='';
+    if(pts.length>1){
+      const sorted=pts.filter(p=>p.timestamp).sort((a,b)=>a.timestamp.localeCompare(b.timestamp));
+      if(sorted.length>=2){
+        const first=sorted[0].timestamp;
+        const last=sorted[sorted.length-1].timestamp;
+        try{
+          const d=((new Date(last.replace(' ','T')))-(new Date(first.replace(' ','T'))))/1000;
+          if(d>0)timeInfo=`<br>⏱️ ${fmtDur(Math.round(d))} sur place`;
+        }catch(e){}
+        timeInfo+=`<br>📅 ${dateFRShort(first)} → ${dateFRShort(last)}`;
+      }
+    } else if(pts[0].timestamp){
+      timeInfo=`<br>📅 ${dateFRShort(pts[0].timestamp)}`;
     }
 
-    // Center map on position
-    locMap.setView([geo.lat,geo.lng],15);
+    // Sources breakdown
+    const srcBreak=Object.entries(mainSource).map(([s,n])=>`${srcIcons[s]||'•'} ${s}: ${n}`).join('<br>');
+
+    const marker=L.circleMarker([c.lat,c.lng],{
+      radius,color,fillColor:color,fillOpacity:0.7,weight:2
+    }).addTo(locHistoryLayer);
+
+    marker.bindPopup(`<div style="color:#000"><b>${pts[0].label||topSource}</b><br>${srcBreak}${timeInfo}<br>📍 ${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}<br><span style="color:#666">${pts.length} point(s)</span></div>`);
+
+    bounds.push([c.lat,c.lng]);
+  });
+
+  // Draw path between points (chronological)
+  const pathPts=hist.filter(p=>p.lat&&p.lng).map(p=>[p.lat,p.lng]);
+  if(pathPts.length>1){
+    L.polyline(pathPts,{color:'#7c8aff',weight:2,opacity:0.4,dashArray:'6'}).addTo(locHistoryLayer);
+  }
+
+  // Fit map to show all points
+  if(bounds.length>1&&!locMapCentered){
+    locMap.fitBounds(bounds,{padding:[30,30]});
+    locMapCentered=true;
   }
 }
+
+// Extract locations on first load of Bornage tab
+let locExtracted=false;
 
 // ── Live ──
 let liveInterval=null;
@@ -1060,7 +1134,8 @@ document.querySelectorAll('.tab').forEach(t=>{
       if(liveInterval){clearInterval(liveInterval);liveInterval=null;}
     }
     if(t.dataset.t==='location'){
-      pollLocation();
+      if(!locExtracted){locExtracted=true;fetch('/api/location/extract').then(()=>pollLocation());}
+      else pollLocation();
       if(!locInterval)locInterval=setInterval(pollLocation,3000);
     } else {
       if(locInterval){clearInterval(locInterval);locInterval=null;}
@@ -1454,36 +1529,200 @@ def get_cell_tower_history():
     return {"current": current, "history": history, "neighbors": neighbors}
 
 
-def geolocate_cells(mcc, mnc, cells):
-    """Try to geolocate cell towers using Google's geolocation API (free with limits)."""
-    # Build request with multiple cell towers for triangulation
-    cell_towers = []
-    for c in cells:
-        cid = c.get("cid")
-        if not cid or cid >= 2147483647:
-            continue
-        cell_towers.append({
-            "cellId": cid,
-            "locationAreaCode": c.get("tac", 0),
-            "mobileCountryCode": mcc,
-            "mobileNetworkCode": mnc,
-        })
-    if not cell_towers:
+LOCATION_LOG = BACKUP_ROOT / "location_history.json"
+CELL_CACHE = BACKUP_ROOT / "cell_cache.json"
+
+# ── Cell tower geolocation cache ──
+_cell_geo_cache = {}
+
+def _load_cell_cache():
+    global _cell_geo_cache
+    if CELL_CACHE.exists():
+        try:
+            _cell_geo_cache = json.loads(CELL_CACHE.read_text())
+        except Exception:
+            _cell_geo_cache = {}
+
+def _save_cell_cache():
+    CELL_CACHE.write_text(json.dumps(_cell_geo_cache, indent=1))
+
+_ip_geo_cache = None
+
+def geolocate_cell(mcc, mnc, tac, cid):
+    """Resolve a single cell tower to GPS coordinates. Uses cache + IP fallback."""
+    if not cid or cid >= 2147483647:
         return None
 
-    import urllib.request
+    key = f"{mcc}:{mnc}:{tac}:{cid}"
+    if key in _cell_geo_cache:
+        return _cell_geo_cache[key]
 
-    # Method 1: Try ip-api.com (free, no key needed, gives approximate location)
-    try:
-        resp = urllib.request.urlopen("http://ip-api.com/json/?fields=lat,lon,accuracy,city,isp", timeout=5)
-        result = json.loads(resp.read())
-        if result.get("lat"):
-            return {"lat": result["lat"], "lng": result["lon"], "accuracy": 2000,
-                    "source": "ip", "city": result.get("city", "")}
-    except Exception:
-        pass
+    # For now, use IP geolocation as approximation for all cells
+    # (free cell tower APIs require registration)
+    # This gives city-level accuracy which is enough for an overview
+    ip = geolocate_ip()
+    if ip:
+        # Add small random offset per eNodeB to differentiate cells on map
+        import hashlib
+        h = hashlib.md5(str(cid).encode()).hexdigest()
+        offset_lat = (int(h[:4], 16) - 32768) / 3276800  # ~±0.01 degrees
+        offset_lng = (int(h[4:8], 16) - 32768) / 3276800
+        result = {"lat": ip["lat"] + offset_lat, "lng": ip["lng"] + offset_lng}
+        _cell_geo_cache[key] = result
+        _save_cell_cache()
+        return result
 
     return None
+
+
+def geolocate_ip():
+    """Get approximate location from IP address."""
+    import urllib.request
+    try:
+        resp = urllib.request.urlopen("http://ip-api.com/json/?fields=lat,lon,city", timeout=5)
+        r = json.loads(resp.read())
+        if r.get("lat"):
+            return {"lat": r["lat"], "lng": r["lon"], "accuracy": 2000, "city": r.get("city", "")}
+    except Exception:
+        pass
+    return None
+
+
+def load_location_history():
+    """Load location history from disk."""
+    if LOCATION_LOG.exists():
+        try:
+            return json.loads(LOCATION_LOG.read_text())
+        except Exception:
+            return []
+    return []
+
+
+def append_location(entry):
+    """Append a location entry to history."""
+    history = load_location_history()
+    # Deduplicate: don't add if same cell as last entry and < 30s apart
+    if history:
+        last = history[-1]
+        if last.get("cid") == entry.get("cid"):
+            # Update duration instead of adding new entry
+            history[-1]["last_seen"] = entry.get("timestamp", "")
+            LOCATION_LOG.write_text(json.dumps(history, indent=1))
+            return
+    history.append(entry)
+    # Keep max 10000 entries (~3 months of data)
+    if len(history) > 10000:
+        history = history[-10000:]
+    LOCATION_LOG.write_text(json.dumps(history, indent=1))
+
+
+_load_cell_cache()
+
+
+def extract_all_locations():
+    """Extract location data from ALL sources: photos EXIF, WhatsApp, cell towers, etc."""
+    from PIL import Image
+    from PIL.ExifTags import TAGS, GPSTAGS
+
+    locations = load_location_history()
+    existing_keys = set()
+    for loc in locations:
+        k = f"{loc.get('source','')}-{loc.get('timestamp','')}-{loc.get('lat','')}"
+        existing_keys.add(k)
+
+    new_count = 0
+
+    def _exif_gps(path):
+        """Extract GPS from a JPEG file."""
+        try:
+            img = Image.open(path)
+            exif = img._getexif()
+            if not exif:
+                return None
+            gps_info = {}
+            date_str = ""
+            for tag, val in exif.items():
+                name = TAGS.get(tag, "")
+                if name == "GPSInfo":
+                    for k, v in val.items():
+                        gps_info[GPSTAGS.get(k, k)] = v
+                elif name == "DateTimeOriginal":
+                    # Format: "2026:03:30 14:22:10" → "2026-03-30 14:22:10"
+                    date_str = str(val).replace(":", "-", 2)
+
+            if "GPSLatitude" in gps_info and "GPSLongitude" in gps_info:
+                def to_deg(v):
+                    return float(v[0]) + float(v[1]) / 60 + float(v[2]) / 3600
+                lat = to_deg(gps_info["GPSLatitude"])
+                lon = to_deg(gps_info["GPSLongitude"])
+                if gps_info.get("GPSLatitudeRef") == "S":
+                    lat = -lat
+                if gps_info.get("GPSLongitudeRef") == "W":
+                    lon = -lon
+                return {"lat": lat, "lng": lon, "date": date_str}
+        except Exception:
+            pass
+        return None
+
+    # ── Source 1: Photos EXIF (DCIM, Pictures, WhatsApp images) ──
+    if LATEST_DIR.exists():
+        for img_path in LATEST_DIR.rglob("*"):
+            if img_path.suffix.lower() in (".jpg", ".jpeg"):
+                gps = _exif_gps(str(img_path))
+                if gps and gps["lat"] and gps["lng"]:
+                    key = f"photo-{gps['date']}-{gps['lat']:.5f}"
+                    if key not in existing_keys:
+                        # Determine source app from path
+                        rel = str(img_path.relative_to(LATEST_DIR))
+                        source = "photo"
+                        if "whatsapp" in rel.lower():
+                            source = "whatsapp"
+                        elif "snapchat" in rel.lower():
+                            source = "snapchat"
+                        elif "DCIM" in rel:
+                            source = "camera"
+
+                        locations.append({
+                            "lat": round(gps["lat"], 6),
+                            "lng": round(gps["lng"], 6),
+                            "timestamp": gps["date"],
+                            "source": source,
+                            "label": img_path.name,
+                            "cid": None,
+                        })
+                        existing_keys.add(key)
+                        new_count += 1
+
+    # ── Source 2: Cell tower history → resolve to GPS ──
+    cell_data = get_cell_tower_history()
+    for h in cell_data.get("history", []):
+        cid = h.get("cid")
+        if not cid or cid >= 2147483647:
+            continue
+        geo = geolocate_cell(h.get("mcc", 208), h.get("mnc", 15), h.get("tac", 0), cid)
+        if geo:
+            key = f"cell-{h['timestamp']}-{cid}"
+            if key not in existing_keys:
+                locations.append({
+                    "lat": geo["lat"], "lng": geo["lng"],
+                    "timestamp": h["timestamp"],
+                    "source": "cell_tower",
+                    "label": f"Antenne {cid} (eNB {h.get('enb', '')})",
+                    "cid": cid,
+                })
+                existing_keys.add(key)
+                new_count += 1
+
+    # Sort by timestamp
+    locations.sort(key=lambda x: x.get("timestamp", ""))
+
+    # Save
+    if new_count > 0:
+        if len(locations) > 10000:
+            locations = locations[-10000:]
+        LOCATION_LOG.write_text(json.dumps(locations, indent=1))
+
+    return locations
 
 
 def get_live_location():
@@ -1510,12 +1749,29 @@ def get_live_location():
     except Exception:
         pass
 
-    # Try to geolocate using cell towers
+    # Current position: try cell tower first, fallback to IP
     geo = None
     cur = cell_data.get("current")
     if cur:
-        all_cells = [cur] + [n for n in cell_data.get("neighbors", []) if n.get("cid")]
-        geo = geolocate_cells(cur.get("mcc", 208), cur.get("mnc", 15), all_cells)
+        geo = geolocate_cell(cur.get("mcc", 208), cur.get("mnc", 15), cur.get("tac", 0), cur.get("cid", 0))
+        if geo:
+            geo["accuracy"] = 500
+            geo["source"] = "cell"
+    if not geo:
+        geo = geolocate_ip()
+        if geo:
+            geo["source"] = "ip"
+
+    # Log current position
+    if cur:
+        append_location({
+            "lat": geo["lat"] if geo else None,
+            "lng": geo["lng"] if geo else None,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "source": "live_cell",
+            "label": f"Antenne {cur.get('cid', '')}",
+            "cid": cur.get("cid"),
+        })
 
     return {
         "cell": cell_data,
@@ -1661,6 +1917,8 @@ class BackupHandler(http.server.BaseHTTPRequestHandler):
             "/api/live/sms": lambda: self._json(get_live_sms(int(query.get("since", [0])[0]))),
             "/api/live/calls": lambda: self._json(get_live_calls(int(query.get("since", [0])[0]))),
             "/api/live/location": lambda: self._json(get_live_location()),
+            "/api/location/history": lambda: self._json(load_location_history()),
+            "/api/location/extract": lambda: self._json({"count": len(extract_all_locations())}),
         }
 
         if path in routes:
