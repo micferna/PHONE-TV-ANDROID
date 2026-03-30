@@ -15,7 +15,22 @@ BACKUP_ROOT = Path.home() / "Backups" / "Phone"
 LATEST_DIR = BACKUP_ROOT / "latest"
 EXPORTS_DIR = BACKUP_ROOT / "exports"
 ARCHIVES_DIR = BACKUP_ROOT / "archives"
+CONFIG_FILE = BACKUP_ROOT / "config.json"
 PORT = 8042
+
+# ── API Keys config ─────────────────────────────────────────────────
+def load_config():
+    if CONFIG_FILE.exists():
+        try:
+            return json.loads(CONFIG_FILE.read_text())
+        except Exception:
+            pass
+    return {}
+
+def save_config(cfg):
+    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+
+_config = load_config()
 
 DASHBOARD_HTML = r"""<!DOCTYPE html>
 <html lang="fr">
@@ -165,6 +180,7 @@ tr:hover td { background:var(--surface2); }
     <button class="tab" data-t="location">📍 Bornage</button>
     <button class="tab" data-t="live">⚡ Live</button>
     <button class="tab" data-t="logs">📋 Logs</button>
+    <button class="tab" data-t="settings">⚙️</button>
   </div>
 </nav>
 
@@ -319,6 +335,37 @@ tr:hover td { background:var(--surface2); }
 <!-- ═══ Logs ═══ -->
 <div class="sec" id="s-logs">
   <div class="logbox" id="full-log"></div>
+</div>
+
+<!-- ═══ Settings ═══ -->
+<div class="sec" id="s-settings">
+  <div class="card" style="margin-bottom:12px">
+    <h3 style="margin-bottom:12px">Clés API (gratuit)</h3>
+    <p style="color:var(--dim);font-size:13px;margin-bottom:16px">Ajoute des clés pour débloquer plus de sources OSINT. Toutes sont gratuites.</p>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div>
+        <div class="lbl">OpenCelliD — Géolocalisation antennes</div>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Inscription: <a href="https://opencellid.org" target="_blank" style="color:var(--accent)">opencellid.org</a> → gratuit, illimité</div>
+        <input class="search" id="cfg-opencellid" placeholder="Clé OpenCelliD..." style="margin:0">
+      </div>
+      <div>
+        <div class="lbl">NumVerify — Validation numéro + carrier</div>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Inscription: <a href="https://numverify.com" target="_blank" style="color:var(--accent)">numverify.com</a> → 100 requêtes/mois gratuit</div>
+        <input class="search" id="cfg-numverify" placeholder="Clé NumVerify..." style="margin:0">
+      </div>
+      <div>
+        <div class="lbl">Intelligence X — Fuites de données / darknet</div>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Inscription: <a href="https://intelx.io" target="_blank" style="color:var(--accent)">intelx.io</a> → 10 recherches/jour gratuit</div>
+        <input class="search" id="cfg-intelx" placeholder="Clé Intelligence X..." style="margin:0">
+      </div>
+    </div>
+    <button onclick="saveConfig()" style="margin-top:16px;padding:10px 24px;border-radius:var(--r);background:var(--accent);color:#fff;border:none;cursor:pointer;font-weight:600">💾 Sauvegarder</button>
+    <div id="cfg-status" style="font-size:12px;margin-top:8px"></div>
+  </div>
+  <div class="card">
+    <h3 style="margin-bottom:8px">Sources OSINT actives</h3>
+    <div id="osint-sources"></div>
+  </div>
 </div>
 
 </div>
@@ -790,6 +837,17 @@ function showOsintDetail(idx){
       <button onclick="openConvForNum('${i.normalized}')" style="padding:8px 16px;border-radius:var(--r-sm);background:var(--accent);color:#fff;border:none;cursor:pointer;font-weight:600">💬 Voir SMS</button>
     </div>
     <div style="margin-top:12px"><div class="lbl" style="margin-bottom:8px">Activité par heure</div>${heatmap}</div>
+    ${i.scam_reports?`<div class="sec-alert danger">🚫 ${i.scam_reports} signalement(s) arnaque sur signal-arnaques.com</div>`:''}
+    ${i.intelx_count?`<div class="row"><div class="card"><div class="lbl">🔓 Intelligence X — Fuites de données</div>
+      <div style="margin-top:4px">${(i.intelx_results||[]).map(r=>`<div style="padding:4px 0;border-bottom:1px solid var(--border);font-size:12px"><span class="badge" style="background:var(--surface2)">${esc(r.type)}</span> <span style="font-family:monospace">${esc(r.value)}</span></div>`).join('')}
+      <div style="color:var(--dim);font-size:11px;margin-top:4px">${i.intelx_count} résultat(s) trouvé(s)</div>
+    </div></div>`:''}
+    ${i.web_mentions&&i.web_mentions.length?`<div class="row"><div class="card" style="flex:1"><div class="lbl">🌐 Mentions web (DuckDuckGo)</div>
+      ${i.web_mentions.map(w=>`<div style="padding:6px 0;border-bottom:1px solid var(--border)">
+        <a href="${esc(w.url)}" target="_blank" rel="noopener" style="color:var(--accent);font-size:13px;text-decoration:none">${esc(w.title)}</a>
+        <div style="font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.url)}</div>
+      </div>`).join('')}
+    </div></div>`:''}
     ${i.risk?`<div style="margin-top:12px;padding:10px;background:var(--red-dim);border-radius:var(--r-sm);color:var(--red)">${esc(i.risk)}</div>`:''}
   </div>`;
   el.scrollIntoView({behavior:'smooth'});
@@ -1308,7 +1366,49 @@ document.querySelectorAll('.tab').forEach(t=>{
   };
 });
 
+// ── Settings ──
+async function saveConfig(){
+  const cfg={
+    opencellid_key:document.getElementById('cfg-opencellid').value.trim(),
+    numverify_key:document.getElementById('cfg-numverify').value.trim(),
+    intelx_key:document.getElementById('cfg-intelx').value.trim(),
+  };
+  const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)}).then(r=>r.json()).catch(()=>({ok:false}));
+  const st=document.getElementById('cfg-status');
+  if(r.ok){
+    st.innerHTML='<span style="color:var(--green)">✓ Sauvegardé — le cache OSINT a été vidé, les prochaines recherches utiliseront les nouvelles clés</span>';
+    updateSourcesList();
+  } else st.innerHTML='<span style="color:var(--red)">✗ Erreur</span>';
+}
+
+function updateSourcesList(){
+  const sources=[
+    {name:'phonenumbers',desc:'Opérateur, type, validité',status:'always',color:'var(--green)'},
+    {name:'Tellows',desc:'Score spam, type appelant',status:'always',color:'var(--green)'},
+    {name:'Annuaire Entreprises',desc:'Registre du commerce (gouv.fr)',status:'always',color:'var(--green)'},
+    {name:'Pages Blanches',desc:'Nom/adresse abonnés fixes',status:'always',color:'var(--green)'},
+    {name:'DuckDuckGo',desc:'Mentions web du numéro',status:'always',color:'var(--green)'},
+    {name:'Signal-Arnaques',desc:'Signalements arnaque FR',status:'always',color:'var(--green)'},
+    {name:'OpenCelliD',desc:'Géolocalisation antennes → carte',status:document.getElementById('cfg-opencellid').value?'configured':'needs_key',color:document.getElementById('cfg-opencellid').value?'var(--green)':'var(--dim)'},
+    {name:'NumVerify',desc:'Validation + carrier détaillé',status:document.getElementById('cfg-numverify').value?'configured':'needs_key',color:document.getElementById('cfg-numverify').value?'var(--green)':'var(--dim)'},
+    {name:'Intelligence X',desc:'Fuites de données, darknet',status:document.getElementById('cfg-intelx').value?'configured':'needs_key',color:document.getElementById('cfg-intelx').value?'var(--green)':'var(--dim)'},
+  ];
+  document.getElementById('osint-sources').innerHTML=sources.map(s=>`
+    <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
+      <div><b>${s.name}</b> <span style="color:var(--dim);font-size:12px">— ${s.desc}</span></div>
+      <span style="color:${s.color};font-size:12px;font-weight:600">${s.status==='always'?'✅ Actif':s.status==='configured'?'✅ Clé configurée':'⚪ Clé requise'}</span>
+    </div>
+  `).join('');
+}
+
 init();
+// Load settings state
+fetch('/api/config').then(r=>r.json()).then(cfg=>{
+  if(cfg.opencellid_key)document.getElementById('cfg-opencellid').value=cfg.opencellid_key==='***'?'':cfg.opencellid_key;
+  if(cfg.numverify_key)document.getElementById('cfg-numverify').value=cfg.numverify_key==='***'?'':cfg.numverify_key;
+  if(cfg.intelx_key)document.getElementById('cfg-intelx').value=cfg.intelx_key==='***'?'':cfg.intelx_key;
+  updateSourcesList();
+}).catch(()=>{updateSourcesList();});
 </script>
 </body>
 </html>"""
@@ -1558,6 +1658,97 @@ def analyze_number(num):
         except Exception:
             pass
 
+    # ── Source 5: NumVerify (carrier + line type validation, 100/mois) ──
+    numverify_key = _config.get("numverify_key", "")
+    if numverify_key:
+        try:
+            url = f"http://apilayer.net/api/validate?access_key={numverify_key}&number={norm}&country_code=FR"
+            resp = urllib.request.urlopen(url, timeout=5)
+            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            if data.get("valid") is not None:
+                info["numverify_valid"] = data.get("valid", False)
+                info["numverify_carrier"] = data.get("carrier", "")
+                info["numverify_line_type"] = data.get("line_type", "")
+                info["numverify_location"] = data.get("location", "")
+                # Override operator if we got better data
+                if data.get("carrier") and not info["operator"]:
+                    info["operator"] = data["carrier"]
+                if data.get("location") and not info["geo"]:
+                    info["geo"] = data["location"]
+        except Exception:
+            pass
+
+    # ── Source 6: Intelligence X (breach/paste data, 10/jour) ──
+    intelx_key = _config.get("intelx_key", "")
+    if intelx_key:
+        try:
+            payload = json.dumps({
+                "term": norm, "maxresults": 5, "media": 0, "target": 1
+            }).encode()
+            req = urllib.request.Request(
+                "https://2.intelx.io/phonebook/search",
+                data=payload,
+                headers={"x-key": intelx_key, "Content-Type": "application/json"})
+            resp = urllib.request.urlopen(req, timeout=8)
+            search_data = json.loads(resp.read().decode())
+            search_id = search_data.get("id", "")
+            if search_id:
+                import time
+                time.sleep(2)
+                req2 = urllib.request.Request(
+                    f"https://2.intelx.io/phonebook/search/result?id={search_id}&limit=5",
+                    headers={"x-key": intelx_key})
+                resp2 = urllib.request.urlopen(req2, timeout=8)
+                results = json.loads(resp2.read().decode())
+                selectors = results.get("selectors", [])
+                info["intelx_results"] = []
+                for s in selectors[:10]:
+                    info["intelx_results"].append({
+                        "value": s.get("selectorvalue", ""),
+                        "type": s.get("selectortypeh", ""),
+                    })
+                if selectors:
+                    info["intelx_count"] = len(selectors)
+        except Exception:
+            pass
+
+    # ── Source 7: Web search for mentions (DuckDuckGo HTML, no key) ──
+    info["web_mentions"] = []
+    try:
+        search_q = urllib.parse.quote(local_num)
+        url = f"https://html.duckduckgo.com/html/?q={search_q}"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
+        resp = urllib.request.urlopen(req, timeout=8)
+        html = resp.read().decode("utf-8", errors="ignore")
+        # Extract result titles and URLs
+        for m in re.finditer(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.+?)</a>', html):
+            raw_url = m.group(1)
+            title = re.sub(r'<[^>]+>', '', m.group(2)).strip()
+            # DuckDuckGo wraps URLs
+            real_url = ""
+            url_match = re.search(r'uddg=([^&]+)', raw_url)
+            if url_match:
+                real_url = urllib.parse.unquote(url_match.group(1))
+            if title and len(info["web_mentions"]) < 5:
+                info["web_mentions"].append({"title": title, "url": real_url or raw_url})
+    except Exception:
+        pass
+
+    # ── Source 8: Signal-Arnaques (French scam DB) ──
+    try:
+        url = f"https://www.signal-arnaques.com/search?q={local_num}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=5)
+        html = resp.read().decode("utf-8", errors="ignore")
+        scam_count = len(re.findall(r'class="report-', html))
+        if scam_count > 0:
+            info["scam_reports"] = scam_count
+            if not info["risk"]:
+                info["risk"] = f"⚠️ {scam_count} signalement(s) arnaque"
+    except Exception:
+        pass
+
     _osint_cache[norm] = info
     _save_osint_cache()
     return info
@@ -1645,6 +1836,10 @@ def build_osint_report(sms_data, calls_data, contacts_data):
             "spam_score": analysis.get("spam_score", 0),
             "spam_type": analysis.get("spam_type", ""),
             "valid": analysis.get("valid", True),
+            "scam_reports": analysis.get("scam_reports", 0),
+            "web_mentions": analysis.get("web_mentions", []),
+            "intelx_results": analysis.get("intelx_results", []),
+            "intelx_count": analysis.get("intelx_count", 0),
         })
 
     report.sort(key=lambda x: x["total_interactions"], reverse=True)
@@ -1828,7 +2023,7 @@ def _save_cell_cache():
     CELL_CACHE.write_text(json.dumps(_cell_geo_cache, indent=1))
 
 def geolocate_cell(mcc, mnc, tac, cid):
-    """Resolve a single cell tower to GPS coordinates. Uses cache."""
+    """Resolve a single cell tower to GPS coordinates. Uses cache + API keys."""
     if not cid or cid >= 2147483647:
         return None
 
@@ -1836,8 +2031,25 @@ def geolocate_cell(mcc, mnc, tac, cid):
     if key in _cell_geo_cache:
         return _cell_geo_cache[key]
 
-    # Only return real data from APIs, never fake IP-based positions
     import urllib.request
+
+    # Method 1: OpenCelliD with API key (best, free with registration)
+    ocid_key = _config.get("opencellid_key", "")
+    if ocid_key:
+        try:
+            url = f"https://opencellid.org/cell/get?key={ocid_key}&mcc={mcc}&mnc={mnc}&lac={tac}&cellid={cid}&format=json"
+            resp = urllib.request.urlopen(url, timeout=5)
+            data = json.loads(resp.read())
+            if data.get("lat") and data.get("lon"):
+                result = {"lat": float(data["lat"]), "lng": float(data["lon"]),
+                          "accuracy": int(data.get("range", 1000))}
+                _cell_geo_cache[key] = result
+                _save_cell_cache()
+                return result
+        except Exception:
+            pass
+
+    # Method 2: OpenCelliD public search (no key, less reliable)
     try:
         url = f"https://opencellid.org/ajax/searchCell.php?mcc={mcc}&mnc={mnc}&lac={tac}&cell_id={cid}"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -2210,7 +2422,16 @@ class BackupHandler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length)) if length else {}
 
-        if path == "/api/sms/send":
+        if path == "/api/config":
+            global _config
+            _config.update(body)
+            save_config(_config)
+            # Clear OSINT cache to re-fetch with new keys
+            global _osint_cache
+            _osint_cache = {}
+            _save_osint_cache()
+            self._json({"ok": True})
+        elif path == "/api/sms/send":
             result = send_sms(body.get("to", ""), body.get("body", ""))
             self._json(result)
         elif path == "/api/call/make":
@@ -2245,6 +2466,7 @@ class BackupHandler(http.server.BaseHTTPRequestHandler):
             "/api/live/location": lambda: self._json(get_live_location()),
             "/api/location/history": lambda: self._json(load_location_history()),
             "/api/location/extract": lambda: self._json({"count": len(extract_all_locations())}),
+            "/api/config": lambda: self._json({k: ("***" if "key" in k and v else v) for k, v in _config.items()}),
         }
 
         if path in routes:
