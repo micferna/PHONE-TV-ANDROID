@@ -156,22 +156,257 @@ sync_files() {
 
 # ── SMS Export ──────────────────────────────────────────────────────
 export_sms() {
-    log "export_sms: not implemented"
+    log "Exporting SMS..."
+
+    local raw
+    raw=$(adb -s "$DEVICE_SERIAL" shell content query --uri content://sms 2>/dev/null || echo "")
+
+    if [ -z "$raw" ]; then
+        log "  No SMS data or access denied"
+        return
+    fi
+
+    local json_file="$EXPORTS_DIR/sms_${TODAY}.json"
+    local csv_file="$EXPORTS_DIR/sms_${TODAY}.csv"
+    local count=0
+
+    echo "[" > "$json_file"
+    local first=true
+
+    while IFS= read -r line; do
+        if [[ "$line" != Row:* ]]; then
+            continue
+        fi
+
+        local date_val="" address="" body="" type_val="" read_val=""
+
+        if [[ "$line" =~ date=([0-9]+) ]]; then
+            date_val="${BASH_REMATCH[1]}"
+        fi
+        if [[ "$line" =~ address=([^,]+) ]]; then
+            address="${BASH_REMATCH[1]}"
+            address="${address## }"
+        fi
+        if [[ "$line" =~ body=(.*),\ read= ]]; then
+            body="${BASH_REMATCH[1]}"
+        fi
+        if [[ "$line" =~ type=([0-9]+) ]]; then
+            type_val="${BASH_REMATCH[1]}"
+        fi
+        if [[ "$line" =~ read=([0-9]+) ]]; then
+            read_val="${BASH_REMATCH[1]}"
+        fi
+
+        local date_human=""
+        if [ -n "$date_val" ]; then
+            date_human=$(date -d "@$(( date_val / 1000 ))" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$date_val")
+        fi
+
+        local type_label="unknown"
+        case "$type_val" in
+            1) type_label="received" ;;
+            2) type_label="sent" ;;
+            3) type_label="draft" ;;
+            4) type_label="outbox" ;;
+        esac
+
+        local body_escaped
+        body_escaped=$(printf '%s' "$body" | jq -Rs '.' 2>/dev/null || echo "\"\"")
+
+        if [ "$first" = true ]; then
+            first=false
+        else
+            echo "," >> "$json_file"
+        fi
+
+        cat >> "$json_file" <<JSONEOF
+  {"date": "$date_human", "date_epoch_ms": ${date_val:-0}, "address": "$address", "body": $body_escaped, "type": "$type_label", "read": ${read_val:-0}}
+JSONEOF
+        count=$(( count + 1 ))
+    done <<< "$raw"
+
+    echo "]" >> "$json_file"
+
+    echo "date,address,body,type,read" > "$csv_file"
+    jq -r '.[] | [.date, .address, (.body | gsub(","; " ") | gsub("\n"; " ")), .type, .read] | @csv' "$json_file" >> "$csv_file" 2>/dev/null
+
+    log "  SMS exported: $count messages"
 }
 
 # ── Contacts Export ─────────────────────────────────────────────────
 export_contacts() {
-    log "export_contacts: not implemented"
+    log "Exporting contacts..."
+
+    local raw
+    raw=$(adb -s "$DEVICE_SERIAL" shell content query --uri content://contacts/phones --projection display_name:number:type 2>/dev/null || echo "")
+
+    if [ -z "$raw" ]; then
+        log "  No contacts data or access denied"
+        return
+    fi
+
+    local json_file="$EXPORTS_DIR/contacts_${TODAY}.json"
+    local csv_file="$EXPORTS_DIR/contacts_${TODAY}.csv"
+    local count=0
+
+    echo "[" > "$json_file"
+    local first=true
+
+    while IFS= read -r line; do
+        if [[ "$line" != Row:* ]]; then
+            continue
+        fi
+
+        local display_name="" number="" type_val=""
+
+        if [[ "$line" =~ display_name=([^,]+) ]]; then
+            display_name="${BASH_REMATCH[1]}"
+            display_name="${display_name## }"
+        fi
+        if [[ "$line" =~ number=([^,]+) ]]; then
+            number="${BASH_REMATCH[1]}"
+            number="${number## }"
+        fi
+        if [[ "$line" =~ type=([0-9]+) ]]; then
+            type_val="${BASH_REMATCH[1]}"
+        fi
+
+        local type_label="other"
+        case "$type_val" in
+            1) type_label="home" ;;
+            2) type_label="mobile" ;;
+            3) type_label="work" ;;
+        esac
+
+        local name_escaped
+        name_escaped=$(printf '%s' "$display_name" | jq -Rs '.' 2>/dev/null || echo "\"\"")
+
+        if [ "$first" = true ]; then
+            first=false
+        else
+            echo "," >> "$json_file"
+        fi
+
+        cat >> "$json_file" <<JSONEOF
+  {"display_name": $name_escaped, "number": "$number", "type": "$type_label"}
+JSONEOF
+        count=$(( count + 1 ))
+    done <<< "$raw"
+
+    echo "]" >> "$json_file"
+
+    echo "display_name,number,type" > "$csv_file"
+    jq -r '.[] | [.display_name, .number, .type] | @csv' "$json_file" >> "$csv_file" 2>/dev/null
+
+    log "  Contacts exported: $count entries"
 }
 
 # ── Call Log Export ─────────────────────────────────────────────────
 export_call_log() {
-    log "export_call_log: not implemented"
+    log "Exporting call log..."
+
+    local raw
+    raw=$(adb -s "$DEVICE_SERIAL" shell content query --uri content://call_log/calls --projection number:name:date:duration:type 2>/dev/null || echo "")
+
+    if [ -z "$raw" ]; then
+        log "  No call log data or access denied"
+        return
+    fi
+
+    local json_file="$EXPORTS_DIR/call_log_${TODAY}.json"
+    local csv_file="$EXPORTS_DIR/call_log_${TODAY}.csv"
+    local count=0
+
+    echo "[" > "$json_file"
+    local first=true
+
+    while IFS= read -r line; do
+        if [[ "$line" != Row:* ]]; then
+            continue
+        fi
+
+        local number="" name="" date_val="" duration="" type_val=""
+
+        if [[ "$line" =~ number=([^,]+) ]]; then
+            number="${BASH_REMATCH[1]}"
+            number="${number## }"
+        fi
+        if [[ "$line" =~ name=([^,]+) ]]; then
+            name="${BASH_REMATCH[1]}"
+            name="${name## }"
+            [ "$name" = "NULL" ] && name=""
+        fi
+        if [[ "$line" =~ date=([0-9]+) ]]; then
+            date_val="${BASH_REMATCH[1]}"
+        fi
+        if [[ "$line" =~ duration=([0-9]+) ]]; then
+            duration="${BASH_REMATCH[1]}"
+        fi
+        if [[ "$line" =~ type=([0-9]+) ]]; then
+            type_val="${BASH_REMATCH[1]}"
+        fi
+
+        local date_human=""
+        if [ -n "$date_val" ]; then
+            date_human=$(date -d "@$(( date_val / 1000 ))" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$date_val")
+        fi
+
+        local type_label="unknown"
+        case "$type_val" in
+            1) type_label="incoming" ;;
+            2) type_label="outgoing" ;;
+            3) type_label="missed" ;;
+            4) type_label="voicemail" ;;
+            5) type_label="rejected" ;;
+            6) type_label="blocked" ;;
+        esac
+
+        local name_escaped
+        name_escaped=$(printf '%s' "$name" | jq -Rs '.' 2>/dev/null || echo "\"\"")
+
+        if [ "$first" = true ]; then
+            first=false
+        else
+            echo "," >> "$json_file"
+        fi
+
+        cat >> "$json_file" <<JSONEOF
+  {"number": "$number", "name": $name_escaped, "date": "$date_human", "date_epoch_ms": ${date_val:-0}, "duration_sec": ${duration:-0}, "type": "$type_label"}
+JSONEOF
+        count=$(( count + 1 ))
+    done <<< "$raw"
+
+    echo "]" >> "$json_file"
+
+    echo "number,name,date,duration_sec,type" > "$csv_file"
+    jq -r '.[] | [.number, .name, .date, .duration_sec, .type] | @csv' "$json_file" >> "$csv_file" 2>/dev/null
+
+    log "  Call log exported: $count entries"
 }
 
 # ── Weekly Archive ──────────────────────────────────────────────────
 maybe_archive() {
-    log "maybe_archive: not implemented"
+    local recent_archive
+    recent_archive=$(find "$ARCHIVES_DIR" -name "*.tar.zst" -mtime -7 -print -quit 2>/dev/null || echo "")
+
+    if [ -n "$recent_archive" ]; then
+        log "Archive skipped (recent: $(basename "$recent_archive"))"
+        return
+    fi
+
+    local archive_file="$ARCHIVES_DIR/${TODAY}_full.tar.zst"
+    log "Creating weekly archive: $archive_file"
+
+    tar -cf - -C "$BACKUP_ROOT" latest exports 2>/dev/null | zstd -3 -T0 -o "$archive_file" 2>/dev/null
+
+    if [ -f "$archive_file" ]; then
+        local size
+        size=$(du -h "$archive_file" | cut -f1)
+        log "  Archive created: $size"
+    else
+        log "  ERROR: archive creation failed"
+        errors=$(( errors + 1 ))
+    fi
 }
 
 # ── Main ────────────────────────────────────────────────────────────
