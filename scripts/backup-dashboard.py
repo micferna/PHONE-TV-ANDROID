@@ -23,6 +23,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Phone Backup Dashboard</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 :root {
   --bg: #0c0d12; --surface: #151720; --surface2: #1c1f2e; --surface3: #242840;
@@ -138,6 +140,14 @@ tr:hover td { background:var(--surface2); }
 .app-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:10px; }
 .app-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--r); padding:12px 16px; }
 .app-card .pkg { font-family:monospace; font-size:12px; color:var(--dim); margin-top:2px; }
+
+/* ── Map ── */
+#loc-map { height:400px; border-radius:var(--r); border:1px solid var(--border); }
+.leaflet-container { background:var(--surface2) !important; }
+.sec-alert { padding:12px 16px; border-radius:var(--r); margin-bottom:12px; display:flex; align-items:center; gap:10px; }
+.sec-alert.ok { background:var(--green-dim); border:1px solid rgba(74,232,160,.3); }
+.sec-alert.warn { background:var(--orange-dim); border:1px solid rgba(255,179,71,.3); }
+.sec-alert.danger { background:var(--red-dim); border:1px solid rgba(255,92,114,.3); }
 </style>
 </head>
 <body>
@@ -234,12 +244,25 @@ tr:hover td { background:var(--surface2); }
 
 <!-- ═══ Location / Bornage ═══ -->
 <div class="sec" id="s-location">
+  <!-- Security alerts -->
+  <div id="loc-security"></div>
+
   <div class="row" id="loc-current"></div>
+
+  <!-- Map -->
+  <div class="card" style="margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div class="lbl">Carte des antennes</div>
+      <button onclick="pollLocation()" style="padding:6px 16px;border-radius:var(--r-sm);background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:12px">🔄 Rafraîchir</button>
+    </div>
+    <div id="loc-map"></div>
+  </div>
+
   <div class="row">
     <div class="card" style="flex:2">
-      <div class="lbl">Antenne actuelle + voisines</div>
+      <div class="lbl">Antennes visibles</div>
       <div class="tw" style="margin-top:8px"><table><thead><tr>
-        <th>Status</th><th>Cell ID</th><th>eNodeB</th><th>Secteur</th><th>PCI</th><th>TAC</th><th>Bande</th><th>RSRP</th><th>Signal</th>
+        <th>Status</th><th>Cell ID</th><th>eNodeB</th><th>PCI</th><th>Bande</th><th>RSRP</th><th>Signal</th><th>Sécurité</th>
       </tr></thead><tbody id="loc-neighbors"></tbody></table></div>
     </div>
     <div class="card" style="flex:1">
@@ -250,12 +273,9 @@ tr:hover td { background:var(--surface2); }
     </div>
   </div>
   <div class="card" style="margin-top:12px">
-    <div style="display:flex;justify-content:space-between;align-items:center">
-      <div class="lbl">Historique des antennes (bornage)</div>
-      <button onclick="pollLocation()" style="padding:6px 16px;border-radius:var(--r-sm);background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:12px">🔄 Rafraîchir</button>
-    </div>
+    <div class="lbl">Historique des antennes (bornage)</div>
     <div class="tw" style="margin-top:8px"><table><thead><tr>
-      <th>Timestamp</th><th>Cell ID</th><th>eNodeB</th><th>Secteur</th><th>PCI</th><th>TAC</th><th>Opérateur</th><th>EARFCN</th><th>Durée</th>
+      <th>Heure</th><th>Cell ID</th><th>eNodeB</th><th>PCI</th><th>Opérateur</th><th>Bande</th><th>Durée</th>
     </tr></thead><tbody id="loc-history"></tbody></table></div>
   </div>
 </div>
@@ -370,7 +390,42 @@ function f(u){return fetch(u).then(r=>r.json()).catch(()=>null);}
 function normNum(n){let x=(n||'').replace(/[\s\-\.()]/g,'');if(x.startsWith('0')&&x.length===10)x='+33'+x.slice(1);if(x.startsWith('0033'))x='+33'+x.slice(4);return x;}
 function resolveName(num){return contactMap[normNum(num)]||'';}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
-function fmtDur(s){if(!s)return'-';const m=Math.floor(s/60),r=s%60;return m?m+'m'+(r?r+'s':''):r+'s';}
+function fmtDur(s){if(!s)return'-';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),r=s%60;if(h)return h+'h'+String(m).padStart(2,'0')+'m';return m?m+'m'+(r?String(r).padStart(2,'0')+'s':''):r+'s';}
+
+// ── French date formatting ──
+const MOIS=['janv.','fév.','mars','avr.','mai','juin','juil.','août','sept.','oct.','nov.','déc.'];
+function dateFR(str){
+  // Input: "2026-03-30 07:11:07" → "30 mars 2026 à 07h11"
+  if(!str||str.startsWith('1970'))return'-';
+  const p=str.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/);
+  if(!p)return str;
+  const [,y,mo,d,h,mi]=p;
+  return `${parseInt(d)} ${MOIS[parseInt(mo)-1]} ${y} à ${h}h${mi}`;
+}
+function dateFRShort(str){
+  // "2026-03-30 07:11:07" → "30/03 07h11"
+  if(!str||str.startsWith('1970'))return'-';
+  const p=str.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/);
+  if(!p)return str;
+  const [,y,mo,d,h,mi]=p;
+  const now=new Date();const dy=now.getFullYear().toString();
+  if(y===dy)return `${d}/${mo} ${h}h${mi}`;
+  return `${d}/${mo}/${y.slice(2)} ${h}h${mi}`;
+}
+function dateDay(str){
+  if(!str||str.startsWith('1970'))return'-';
+  const p=str.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if(!p)return str;
+  const jours=['dim.','lun.','mar.','mer.','jeu.','ven.','sam.'];
+  const dt=new Date(p[1],parseInt(p[2])-1,p[3]);
+  return `${jours[dt.getDay()]} ${parseInt(p[3])} ${MOIS[parseInt(p[2])-1]}`;
+}
+function timeOnly(str){
+  if(!str)return'';
+  const p=str.match(/(\d{2}):(\d{2})/);
+  return p?p[1]+'h'+p[2]:'';
+}
+function isValidDate(str){return str&&!str.startsWith('1970')&&str.length>10;}
 function humanSize(b){for(const u of['B','KB','MB','GB']){if(b<1024)return(b%1===0?b:b.toFixed(1))+u;b/=1024;}return b.toFixed(1)+'TB';}
 
 // ── Tabs ──
@@ -442,7 +497,7 @@ function renderConversations(filter=''){
     const last=c.messages[0];
     const isActive=S.convActive===normNum(c.number);
     return `<div class="conv-item${isActive?' on':''}" data-num="${normNum(c.number)}">
-      <div class="top"><span class="name">${esc(c.name||c.number)}</span><span class="date">${(last?.date||'').slice(0,10)}</span></div>
+      <div class="top"><span class="name">${esc(c.name||c.number)}</span><span class="date">${dateFRShort(last?.date)}</span></div>
       <div style="display:flex;justify-content:space-between;align-items:center">
         <div class="preview">${esc((last?.body||'').slice(0,50))}</div>
         <span class="cnt-badge">${c.messages.length}</span>
@@ -478,10 +533,9 @@ function openConversation(numKey,convs){
   let html='';let lastDate='';
   msgs.forEach(m=>{
     const d=(m.date||'').slice(0,10);
-    if(d!==lastDate){html+=`<div class="msg-date-sep">— ${d} —</div>`;lastDate=d;}
+    if(d!==lastDate){html+=`<div class="msg-date-sep">— ${dateDay(m.date)} —</div>`;lastDate=d;}
     const cls=m.type==='sent'?'sent':'recv';
-    const time=(m.date||'').slice(11,16);
-    html+=`<div class="msg ${cls}">${esc(m.body||'')}<div class="time">${time}</div></div>`;
+    html+=`<div class="msg ${cls}">${esc(m.body||'')}<div class="time">${timeOnly(m.date)}</div></div>`;
   });
   const mel=document.getElementById('conv-messages');
   mel.innerHTML=html;
@@ -524,7 +578,7 @@ function renderCalls(filter=''){
   const badgeCls={incoming:'b-recv',outgoing:'b-sent',missed:'b-miss'};
   const typeLabel={incoming:'Entrant',outgoing:'Sortant',missed:'Manqué',voicemail:'Messagerie',rejected:'Rejeté',blocked:'Bloqué'};
   document.getElementById('calls-body').innerHTML=page.map(c=>`<tr>
-    <td>${c.date||''}</td><td>${esc(c.name||resolveName(c.number)||'-')}</td><td style="font-family:monospace">${c.number||''}</td>
+    <td>${dateFRShort(c.date)}</td><td>${esc(c.name||resolveName(c.number)||'-')}</td><td style="font-family:monospace">${c.number||''}</td>
     <td>${fmtDur(c.duration_sec)}</td><td><span class="badge ${badgeCls[c.type]||''}">${typeLabel[c.type]||c.type}</span></td>
   </tr>`).join('');
   renderPag('calls-pag',items.length,S.callsPage,p=>{S.callsPage=p;renderCalls(filter);});
@@ -621,7 +675,7 @@ function renderOsint(filter=''){
       <td><span class="c-green">${i.calls_in}</span> / <span class="c-accent">${i.calls_out}</span></td>
       <td>${i.calls_missed?`<span class="c-red">${i.calls_missed}</span>`:'-'}</td>
       <td>${fmtDur(i.total_duration)}</td>
-      <td style="font-size:11px">${(i.last_seen||'').slice(0,10)}</td>
+      <td style="font-size:11px">${dateFRShort(i.last_seen)}</td>
       <td>${peak}</td>
     </tr>`;
   }).join('');
@@ -665,8 +719,8 @@ function showOsintDetail(idx){
       <div class="card"><div class="lbl">Durée totale</div><div>${fmtDur(i.total_duration)}</div></div>
     </div>
     <div class="row">
-      <div class="card"><div class="lbl">Première interaction</div><div>${i.first_seen||'-'}</div></div>
-      <div class="card"><div class="lbl">Dernière interaction</div><div>${i.last_seen||'-'}</div></div>
+      <div class="card"><div class="lbl">Première interaction</div><div>${dateFR(i.first_seen)}</div></div>
+      <div class="card"><div class="lbl">Dernière interaction</div><div>${dateFR(i.last_seen)}</div></div>
       <div class="card"><div class="lbl">Heure de pic</div><div>${i.peak_hour>=0?i.peak_hour+'h':'-'}</div></div>
     </div>
     <div style="margin-top:12px"><div class="lbl" style="margin-bottom:8px">Activité par heure</div>${heatmap}</div>
@@ -677,24 +731,105 @@ function showOsintDetail(idx){
 
 // ── Location / Bornage ──
 let locInterval=null;
+let locMap=null;
+let locMarkers=[];
+let prevCells=[];  // For IMSI catcher detection
+
+function initMap(){
+  if(locMap)return;
+  locMap=L.map('loc-map',{zoomControl:true}).setView([46.6,2.5],6);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
+    attribution:'CartoDB',maxZoom:19
+  }).addTo(locMap);
+}
+
+// ── IMSI Catcher / Rogue Cell Detection ──
+function analyzeSecurityThreats(cur, neighbors, history){
+  const alerts=[];
+
+  if(!cur)return alerts;
+
+  // 1. Check for 2G downgrade (IMSI catchers force 2G)
+  if(cur.earfcn<1000 && cur.band && cur.band.includes('GSM')){
+    alerts.push({level:'danger',msg:'⚠️ Connexion 2G détectée — Les IMSI catchers forcent souvent un downgrade vers 2G pour intercepter les communications'});
+  }
+
+  // 2. Abnormally strong signal (IMSI catchers are close = very strong signal)
+  if(cur.rsrp && cur.rsrp > -70){
+    alerts.push({level:'warn',msg:`📡 Signal anormalement fort (${cur.rsrp}dBm) — Un signal > -70dBm peut indiquer une fausse antenne proche`});
+  }
+
+  // 3. Check for unknown/mismatched operator
+  if(cur.mcc===208){
+    const validMnc=[1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,20,21,22,23,24,25,26,27,28,29,30,31,88];
+    if(!validMnc.includes(cur.mnc)){
+      alerts.push({level:'danger',msg:`🚨 MNC inconnu (${cur.mnc}) — Cet identifiant réseau n'est pas un opérateur français légitime`});
+    }
+  }
+
+  // 4. TAC change without movement (same eNodeBs around but different TAC)
+  if(history.length>=2){
+    const last2=history.slice(-2);
+    if(last2[0].tac!==last2[1].tac && last2[0].pci===last2[1].pci){
+      alerts.push({level:'warn',msg:`🔄 Changement de TAC suspect (${last2[0].tac} → ${last2[1].tac}) sur la même antenne PCI ${last2[0].pci}`});
+    }
+  }
+
+  // 5. Rapid cell switching (possible jamming/IMSI catcher)
+  if(history.length>=4){
+    const last4=history.slice(-4);
+    const span=((new Date(last4[3].timestamp.replace(' ','T')))-(new Date(last4[0].timestamp.replace(' ','T'))))/1000;
+    if(span>0 && span<120){
+      alerts.push({level:'warn',msg:`⚡ ${history.length} changements d'antenne en ${Math.round(span)}s — Possible brouillage ou IMSI catcher`});
+    }
+  }
+
+  // 6. Neighbor cell with much stronger signal than serving cell
+  for(const n of neighbors){
+    if(!n.registered && n.rsrp && cur.rsrp && (n.rsrp - cur.rsrp > 15)){
+      alerts.push({level:'warn',msg:`📶 Antenne voisine PCI ${n.pci} a un signal beaucoup plus fort (+${n.rsrp-cur.rsrp}dB) que l'antenne active — possible fausse antenne`});
+      break;
+    }
+  }
+
+  // 7. Cell with no encryption indicator (would need more data, flag if missing info)
+  if(neighbors.some(n=>n.cid===null && n.rsrp>-90)){
+    alerts.push({level:'warn',msg:'❓ Antenne voisine sans Cell ID avec fort signal — pourrait être un IMSI catcher non identifié'});
+  }
+
+  // All clear
+  if(!alerts.length){
+    alerts.push({level:'ok',msg:'✅ Aucune anomalie détectée — Réseau semble normal'});
+  }
+
+  return alerts;
+}
+
 async function pollLocation(){
   const data=await f('/api/live/location');
   if(!data)return;
   const cell=data.cell||{};
   const cur=cell.current;
   const wifi=data.wifi||{};
+  const neighbors=cell.neighbors||[];
+  const history=cell.history||[];
 
-  // Current cell info
+  // Security analysis
+  const threats=analyzeSecurityThreats(cur,neighbors,history);
+  document.getElementById('loc-security').innerHTML=threats.map(t=>
+    `<div class="sec-alert ${t.level}">${t.msg}</div>`
+  ).join('');
+
+  // Current cell cards
   if(cur){
     const sigBars='▂▄▆█'.slice(0,Math.max(1,(cur.signal_level||0)+1));
     const rsrpColor=cur.rsrp>-90?'var(--green)':cur.rsrp>-110?'var(--orange)':'var(--red)';
     document.getElementById('loc-current').innerHTML=[
       `<div class="card"><div class="lbl">Opérateur</div><div class="val c-accent">${cur.operator||'?'}</div><div class="sub">MCC ${cur.mcc} / MNC ${cur.mnc}</div></div>`,
-      `<div class="card"><div class="lbl">Cell ID</div><div class="val c-cyan">${cur.cid}</div><div class="sub">eNodeB ${cur.enb} / Secteur ${cur.sector}</div></div>`,
-      `<div class="card"><div class="lbl">TAC</div><div class="val c-green">${cur.tac}</div></div>`,
-      `<div class="card"><div class="lbl">Bande LTE</div><div class="val c-orange">B${cur.band}</div><div class="sub">EARFCN ${cur.earfcn} / ${cur.bandwidth/1000}MHz</div></div>`,
+      `<div class="card"><div class="lbl">Antenne</div><div class="val c-cyan">${cur.enb}</div><div class="sub">CID ${cur.cid} / Secteur ${cur.sector}</div></div>`,
+      `<div class="card"><div class="lbl">Bande</div><div class="val c-orange">B${cur.band}</div><div class="sub">EARFCN ${cur.earfcn} / ${cur.bandwidth/1000}MHz</div></div>`,
       `<div class="card"><div class="lbl">Signal</div><div class="val" style="color:${rsrpColor}">${sigBars} ${cur.rsrp||'?'}dBm</div><div class="sub">RSSI ${cur.rssi||'?'} / RSRQ ${cur.rsrq||'?'}</div></div>`,
-      `<div class="card"><div class="lbl">PCI</div><div class="val c-accent">${cur.pci}</div></div>`,
+      `<div class="card"><div class="lbl">PCI / TAC</div><div class="val c-green">${cur.pci}</div><div class="sub">TAC ${cur.tac}</div></div>`,
     ].join('');
 
     // Signal gauge
@@ -703,7 +838,7 @@ async function pollLocation(){
       <div style="background:var(--surface2);border-radius:var(--r-sm);overflow:hidden;height:20px;margin-top:4px">
         <div style="height:100%;width:${pct}%;background:${rsrpColor};border-radius:var(--r-sm);transition:width .3s"></div>
       </div>
-      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-top:2px"><span>-140dBm</span><span>${cur.rsrp||'?'}dBm</span><span>-80dBm</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-top:2px"><span>Faible</span><span style="color:${rsrpColor};font-weight:600">${cur.rsrp||'?'}dBm</span><span>Fort</span></div>
     `;
   }
 
@@ -713,57 +848,64 @@ async function pollLocation(){
     document.getElementById('loc-wifi').innerHTML=`
       <div style="font-weight:600;font-size:16px">📶 ${esc(wifi.ssid)}</div>
       <div style="font-family:monospace;font-size:12px;color:var(--dim);margin-top:4px">BSSID: ${wifi.bssid||'-'}</div>
-      <div style="font-size:12px;color:var(--dim)">RSSI: ${wifi.rssi}dBm / ${wifi.frequency}MHz</div>
+      <div style="font-size:12px;color:var(--dim)">${wifi.rssi}dBm / ${wifi.frequency}MHz</div>
       <div style="background:var(--surface2);border-radius:var(--r-sm);overflow:hidden;height:12px;margin-top:6px">
         <div style="height:100%;width:${wifiPct}%;background:var(--cyan);border-radius:var(--r-sm)"></div>
       </div>
     `;
   }
 
-  // Neighbors
-  const neighbors=cell.neighbors||[];
+  // Neighbors table
   document.getElementById('loc-neighbors').innerHTML=neighbors.map(n=>{
     const reg=n.registered;
     const sigColor=n.rsrp>-90?'var(--green)':n.rsrp>-110?'var(--orange)':'var(--red)';
     const bars='▂▄▆█'.slice(0,Math.max(1,(n.level||0)+1));
+    // Security check per cell
+    let secIcon='✅';
+    if(n.cid===null && n.rsrp>-90) secIcon='⚠️';
+    if(cur && n.rsrp && cur.rsrp && (n.rsrp-cur.rsrp>15) && !n.registered) secIcon='🔶';
+    const earfcnBand=n.earfcn<600?'B1':n.earfcn<1200?'B3':n.earfcn<1950?'B7':n.earfcn<3800?'B8':n.earfcn<6150?'B20':'B28';
     return `<tr style="${reg?'background:var(--accent-dim)':''}">
       <td>${reg?'<span class="badge b-recv">Active</span>':'<span style="color:var(--dim)">Voisine</span>'}</td>
-      <td style="font-family:monospace">${n.cid||'-'}</td>
+      <td style="font-family:monospace;font-size:12px">${n.cid||'-'}</td>
       <td>${n.cid?n.cid>>8:'-'}</td>
-      <td>${n.cid?n.cid&0xFF:'-'}</td>
       <td>${n.pci}</td>
-      <td>${n.tac!==2147483647?n.tac:'-'}</td>
-      <td>EARFCN ${n.earfcn}</td>
+      <td>${earfcnBand} <span style="color:var(--dim);font-size:11px">(${n.earfcn})</span></td>
       <td style="color:${sigColor};font-weight:600">${n.rsrp}dBm</td>
-      <td>${bars} (${n.level}/4)</td>
+      <td>${bars} <span style="color:var(--dim)">${n.level}/4</span></td>
+      <td>${secIcon}</td>
     </tr>`;
   }).join('');
 
   // History
-  const history=cell.history||[];
   document.getElementById('loc-history').innerHTML=history.map((h,i)=>{
     const next=history[i+1];
-    let duration='-';
+    let duration='<span class="badge b-recv">en cours</span>';
     if(next){
       try{
         const t1=new Date(h.timestamp.replace(' ','T'));
         const t2=new Date(next.timestamp.replace(' ','T'));
         const diff=Math.floor((t2-t1)/1000);
-        if(diff<60)duration=diff+'s';
-        else if(diff<3600)duration=Math.floor(diff/60)+'m'+diff%60+'s';
-        else duration=Math.floor(diff/3600)+'h'+Math.floor((diff%3600)/60)+'m';
+        duration=fmtDur(diff);
       }catch(e){}
-    } else { duration='en cours'; }
+    }
+    const earfcnBand=h.earfcn<600?'B1':h.earfcn<1200?'B3':h.earfcn<1950?'B7':h.earfcn<3800?'B8':h.earfcn<6150?'B20':'B28';
     return `<tr>
-      <td>${h.timestamp}</td>
-      <td style="font-family:monospace">${h.cid}</td>
-      <td>${h.enb}</td><td>${h.sector}</td>
-      <td>${h.pci}</td><td>${h.tac}</td>
-      <td>${h.operator||'?'} (${h.mcc}/${h.mnc})</td>
-      <td>${h.earfcn}</td>
+      <td>${dateFRShort(h.timestamp)}</td>
+      <td style="font-family:monospace;font-size:12px">${h.cid}</td>
+      <td>${h.enb}</td>
+      <td>${h.pci}</td>
+      <td>${h.operator||'?'} <span style="color:var(--dim)">(${h.mcc}/${h.mnc})</span></td>
+      <td>${earfcnBand}</td>
       <td>${duration}</td>
     </tr>`;
   }).join('');
+
+  // Init map
+  initMap();
+  // We can't resolve cell tower coordinates without an API, but we show the map
+  // ready for when GPS data becomes available (from future photos with EXIF GPS)
+  setTimeout(()=>locMap.invalidateSize(),100);
 }
 
 // ── Live ──
@@ -793,7 +935,7 @@ async function livePoll(){
       <div style="flex:1">
         <div style="display:flex;justify-content:space-between">
           <b>${esc(name)}</b>
-          <span style="font-size:11px;color:var(--dim)">${s.date}</span>
+          <span style="font-size:11px;color:var(--dim)">${dateFRShort(s.date)}</span>
         </div>
         <div style="font-size:13px;margin-top:2px">${esc(s.body||'')}</div>
         <div style="font-size:10px;color:var(--dim);margin-top:2px">${osint}</div>
@@ -812,7 +954,7 @@ async function livePoll(){
         <div><b>${esc(name)}</b> <span style="font-family:monospace;font-size:12px;color:var(--dim)">${c.number||''}</span></div>
         <span class="badge ${badgeCls}">${typeLabel}</span>
       </div>
-      <div style="font-size:12px;color:var(--dim);margin-top:2px">${c.date} — ${fmtDur(c.duration_sec)}</div>
+      <div style="font-size:12px;color:var(--dim);margin-top:2px">${dateFRShort(c.date)} — ${fmtDur(c.duration_sec)}</div>
       <div style="font-size:10px;color:var(--dim);margin-top:2px">${osint}</div>
     </div>`;
   }).join('')||'<div style="color:var(--dim);padding:20px;text-align:center">Aucun appel récent</div>';
