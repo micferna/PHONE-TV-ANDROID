@@ -1272,65 +1272,65 @@ def get_live_location():
 
 def send_sms(to, body):
     """Send SMS via ADB: open compose + tap send button."""
+    import time
+
     if not to or not body:
         return {"ok": False, "error": "Numéro et message requis"}
     if not is_device_connected():
         return {"ok": False, "error": "Téléphone non connecté"}
 
+    def sh(cmd, timeout=10):
+        """Run a full shell command string via adb."""
+        return subprocess.run(
+            ["adb", "-s", DEVICE_SERIAL, "shell", cmd],
+            capture_output=True, text=True, timeout=timeout
+        ).stdout.replace('\r', '')
+
     try:
-        # Step 1: Open SMS compose with pre-filled message
-        subprocess.run([
-            "adb", "-s", DEVICE_SERIAL, "shell",
-            "am", "start", "-a", "android.intent.action.SENDTO",
-            "-d", f"smsto:{to}",
-            "--es", "sms_body", body,
-            "--ez", "exit_on_sent", "true",
-        ], capture_output=True, timeout=5)
+        # Wake + open SMS compose
+        sh("input keyevent KEYCODE_WAKEUP")
+        time.sleep(0.3)
+        sh(f"am start -a android.intent.action.SENDTO -d 'smsto:{to}' --es sms_body '{body}'")
 
-        import time
-        time.sleep(2)  # Wait for SMS app to load
+        # Wait and retry finding send button
+        for attempt in range(6):
+            time.sleep(2)
 
-        # Step 2: Find send button dynamically
-        r = subprocess.run([
-            "adb", "-s", DEVICE_SERIAL, "shell",
-            "uiautomator", "dump", "/sdcard/ui.xml",
-        ], capture_output=True, timeout=5)
-        r2 = subprocess.run([
-            "adb", "-s", DEVICE_SERIAL, "shell", "cat", "/sdcard/ui.xml",
-        ], capture_output=True, text=True, timeout=5)
+            # Is messaging app in foreground?
+            focus = sh("dumpsys window | grep mCurrentFocus")
+            if "messaging" not in focus.lower() and "mms" not in focus.lower():
+                if attempt < 3:
+                    sh(f"am start -a android.intent.action.SENDTO -d 'smsto:{to}' --es sms_body '{body}'")
+                continue
 
-        xml = r2.stdout
-        send_match = re.search(
-            r'content-desc="[^"]*(?:[Ee]nvoyer|[Ss]end)[^"]*"\s+[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
-            xml)
+            # Dump UI
+            sh("uiautomator dump /sdcard/ui.xml")
+            xml = sh("cat /sdcard/ui.xml")
 
-        if not send_match:
-            # Fallback: try text attribute
-            send_match = re.search(
-                r'text="[^"]*(?:[Ee]nvoyer|[Ss]end)[^"]*"\s+[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+            # Find send button
+            m = re.search(
+                r'content-desc="([^"]*[Ee]nvoyer[^"]*)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
                 xml)
+            if not m:
+                m = re.search(
+                    r'content-desc="([^"]*[Ss]end[^"]*)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+                    xml)
+            if m:
+                x = (int(m.group(2)) + int(m.group(4))) // 2
+                y = (int(m.group(3)) + int(m.group(5))) // 2
+                sh(f"input tap {x} {y}")
+                time.sleep(1)
+                sh("input keyevent KEYCODE_HOME")
+                return {"ok": True, "message": f"SMS envoyé à {to}"}
 
-        if not send_match:
-            return {"ok": False, "error": "Bouton Envoyer non trouvé — SMS composé mais pas envoyé"}
-
-        x = (int(send_match.group(1)) + int(send_match.group(3))) // 2
-        y = (int(send_match.group(2)) + int(send_match.group(4))) // 2
-
-        # Step 3: Tap send
-        subprocess.run([
-            "adb", "-s", DEVICE_SERIAL, "shell", "input", "tap", str(x), str(y),
-        ], capture_output=True, timeout=5)
-
-        time.sleep(1)
-
-        # Step 4: Go home
-        subprocess.run([
-            "adb", "-s", DEVICE_SERIAL, "shell", "input", "keyevent", "KEYCODE_HOME",
-        ], capture_output=True, timeout=3)
-
-        return {"ok": True, "message": f"SMS envoyé à {to}"}
+        sh("input keyevent KEYCODE_HOME")
+        return {"ok": False, "error": "Bouton Envoyer non trouvé après 6 essais"}
 
     except Exception as e:
+        try:
+            sh("input keyevent KEYCODE_HOME")
+        except Exception:
+            pass
         return {"ok": False, "error": str(e)}
 
 
