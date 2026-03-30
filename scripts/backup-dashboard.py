@@ -761,6 +761,13 @@ function showOsintDetail(idx){
       <div class="card"><div class="lbl">Région</div><div>${i.geo||'-'}</div></div>
       <div class="card"><div class="lbl">Pays</div><div>${i.country||'-'}</div></div>
     </div>
+    ${i.annuaire_name||i.annuaire_address?`<div class="row">
+      <div class="card" style="flex:2"><div class="lbl">📒 Annuaire inversé</div>
+        <div style="font-size:16px;font-weight:600;margin-top:4px">${esc(i.annuaire_name||'-')}</div>
+        ${i.annuaire_address?`<div style="color:var(--dim);margin-top:2px">📍 ${esc(i.annuaire_address)}</div>`:''}
+      </div>
+    </div>`:''}
+    ${i.spam_reports?`<div class="sec-alert ${i.spam_score>30?'danger':'warn'}">🚨 ${i.spam_reports} signalements spam sur ce numéro</div>`:''}
     <div class="row">
       <div class="card"><div class="lbl">Total interactions</div><div class="val c-accent">${total}</div></div>
       <div class="card"><div class="lbl">SMS</div><div>📥 ${i.sms_in} reçus / 📤 ${i.sms_out} envoyés</div></div>
@@ -772,8 +779,12 @@ function showOsintDetail(idx){
       <div class="card"><div class="lbl">Dernière interaction</div><div>${dateFR(i.last_seen)}</div></div>
       <div class="card"><div class="lbl">Heure de pic</div><div>${i.peak_hour>=0?i.peak_hour+'h':'-'}</div></div>
     </div>
+    <div style="margin-top:12px;display:flex;gap:8px">
+      <button onclick="makeQuickCall('${i.normalized}')" style="padding:8px 16px;border-radius:var(--r-sm);background:var(--green);color:#000;border:none;cursor:pointer;font-weight:600">📞 Appeler</button>
+      <button onclick="openConvForNum('${i.normalized}')" style="padding:8px 16px;border-radius:var(--r-sm);background:var(--accent);color:#fff;border:none;cursor:pointer;font-weight:600">💬 Voir SMS</button>
+    </div>
     <div style="margin-top:12px"><div class="lbl" style="margin-bottom:8px">Activité par heure</div>${heatmap}</div>
-    ${i.risk?`<div style="margin-top:12px;padding:10px;background:var(--red-dim);border-radius:var(--r-sm);color:var(--red)">⚠️ ${esc(i.risk)}</div>`:''}
+    ${i.risk?`<div style="margin-top:12px;padding:10px;background:var(--red-dim);border-radius:var(--r-sm);color:var(--red)">${esc(i.risk)}</div>`:''}
   </div>`;
   el.scrollIntoView({behavior:'smooth'});
 }
@@ -1373,11 +1384,19 @@ def normalize_number(num):
     return n
 
 
+_osint_cache = {}
+
 def analyze_number(num):
-    """OSINT analysis of a French phone number."""
+    """OSINT analysis of a French phone number with online lookups."""
     norm = normalize_number(num)
+
+    if norm in _osint_cache:
+        return _osint_cache[norm]
+
     info = {"raw": num, "normalized": norm, "country": "", "type": "", "operator": "",
-            "operator_color": "", "geo": "", "line": "", "risk": ""}
+            "operator_color": "", "geo": "", "line": "", "risk": "",
+            "annuaire_name": "", "annuaire_address": "", "spam_score": 0,
+            "spam_reports": 0, "online_profiles": []}
 
     if not norm.startswith('+33'):
         if norm.startswith('+'):
@@ -1386,6 +1405,7 @@ def analyze_number(num):
         elif not norm:
             info["type"] = "masked"
             info["risk"] = "Numéro masqué"
+        _osint_cache[norm] = info
         return info
 
     info["country"] = "France (+33)"
@@ -1393,6 +1413,7 @@ def analyze_number(num):
 
     if len(digits) < 9:
         info["type"] = "court"
+        _osint_cache[norm] = info
         return info
 
     first = digits[0]
@@ -1403,7 +1424,6 @@ def analyze_number(num):
         info["line"] = "Mobile"
         op = MOBILE_OPERATORS.get(prefix3, "")
         if not op:
-            # Try broader match
             for pfx_len in (3, 2):
                 test = digits[:pfx_len]
                 for k, v in MOBILE_OPERATORS.items():
@@ -1424,7 +1444,7 @@ def analyze_number(num):
         info["line"] = "Numéro spécial"
         if digits[1] == '0':
             info["operator"] = "Gratuit (numéro vert)"
-        elif digits[1] == '1' or digits[1] == '2':
+        elif digits[1] in ('1', '2'):
             info["operator"] = "Surtaxé"
             info["risk"] = "Numéro surtaxé — attention aux frais"
         elif digits[1] == '9':
@@ -1434,6 +1454,44 @@ def analyze_number(num):
         info["line"] = "VoIP / Box internet"
         info["operator"] = "FAI (box)"
 
+    # ── Online OSINT lookups ──
+    import urllib.request
+    local_num = "0" + digits  # format 0XXXXXXXXX
+
+    # 1. Annuaire inversé (pagesjaunes-style scrape)
+    try:
+        url = f"https://www.pagesjaunes.fr/annuaireinverse/recherche?quoiqui={local_num}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
+        resp = urllib.request.urlopen(req, timeout=8)
+        html = resp.read().decode("utf-8", errors="ignore")
+        # Extract name from results
+        import re as _re
+        name_match = _re.search(r'class="denomination[^"]*"[^>]*>([^<]+)<', html)
+        if name_match:
+            info["annuaire_name"] = name_match.group(1).strip()
+        addr_match = _re.search(r'class="adresse[^"]*"[^>]*>([^<]+)<', html)
+        if addr_match:
+            info["annuaire_address"] = addr_match.group(1).strip()
+    except Exception:
+        pass
+
+    # 2. Spam check (signalement de numéros)
+    try:
+        url = f"https://www.indicatif-telephonique.fr/numero/{local_num}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=5)
+        html = resp.read().decode("utf-8", errors="ignore")
+        import re as _re
+        spam_match = _re.search(r'(\d+)\s*(?:signalement|avis)', html, _re.IGNORECASE)
+        if spam_match:
+            info["spam_reports"] = int(spam_match.group(1))
+        if info["spam_reports"] > 5:
+            info["spam_score"] = min(100, info["spam_reports"] * 10)
+            info["risk"] = f"⚠️ {info['spam_reports']} signalements spam"
+    except Exception:
+        pass
+
+    _osint_cache[norm] = info
     return info
 
 
@@ -1510,6 +1568,10 @@ def build_osint_report(sms_data, calls_data, contacts_data):
             "first_seen": stats["first_seen"], "last_seen": stats["last_seen"],
             "peak_hour": peak_hour,
             "hours": dict(stats["hours"]),
+            "annuaire_name": analysis.get("annuaire_name", ""),
+            "annuaire_address": analysis.get("annuaire_address", ""),
+            "spam_reports": analysis.get("spam_reports", 0),
+            "spam_score": analysis.get("spam_score", 0),
         })
 
     report.sort(key=lambda x: x["total_interactions"], reverse=True)
@@ -1988,39 +2050,69 @@ def send_sms(to, body):
         return {"ok": False, "error": str(e)}
 
 
+_audio_process = None
+
 def make_call(number):
-    """Initiate a call via ADB."""
+    """Initiate a call via ADB + route audio to PC via scrcpy."""
+    global _audio_process
     if not number:
         return {"ok": False, "error": "Numéro requis"}
     if not is_device_connected():
         return {"ok": False, "error": "Téléphone non connecté"}
     try:
+        # Start scrcpy audio bridge (mic from PC → phone, phone audio → PC speakers)
+        if _audio_process is None or _audio_process.poll() is not None:
+            _audio_process = subprocess.Popen([
+                "flatpak", "run", "--command=scrcpy", "io.github.IshuSinghSE.aurynk",
+                "-s", DEVICE_SERIAL,
+                "--no-video",           # no screen, just audio
+                "--audio-source=mic",   # phone mic → PC speakers (hear the other person)
+                "--no-control",
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # Initiate the call
         subprocess.run([
             "adb", "-s", DEVICE_SERIAL, "shell",
             "am", "start", "-a", "android.intent.action.CALL", "-d", f"tel:{number}",
         ], capture_output=True, timeout=5)
-        return {"ok": True, "message": f"Appel vers {number}"}
+        return {"ok": True, "message": f"Appel vers {number} — audio routé vers le PC"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 def answer_call():
-    """Answer incoming call via ADB."""
+    """Answer incoming call via ADB + start audio bridge."""
+    global _audio_process
     try:
+        # Start audio bridge
+        if _audio_process is None or _audio_process.poll() is not None:
+            _audio_process = subprocess.Popen([
+                "flatpak", "run", "--command=scrcpy", "io.github.IshuSinghSE.aurynk",
+                "-s", DEVICE_SERIAL,
+                "--no-video",
+                "--audio-source=mic",
+                "--no-control",
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Answer
         subprocess.run([
             "adb", "-s", DEVICE_SERIAL, "shell", "input", "keyevent", "KEYCODE_CALL",
         ], capture_output=True, timeout=3)
-        return {"ok": True}
+        return {"ok": True, "message": "Appel décroché — audio sur le PC"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 def hangup_call():
-    """Hang up current call via ADB."""
+    """Hang up current call via ADB + stop audio bridge."""
+    global _audio_process
     try:
         subprocess.run([
             "adb", "-s", DEVICE_SERIAL, "shell", "input", "keyevent", "KEYCODE_ENDCALL",
         ], capture_output=True, timeout=3)
+        # Stop audio bridge
+        if _audio_process and _audio_process.poll() is None:
+            _audio_process.terminate()
+            _audio_process = None
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
