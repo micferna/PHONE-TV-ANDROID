@@ -761,12 +761,14 @@ function renderOsint(filter=''){
     const opStyle=i.operator_color?`color:${i.operator_color};font-weight:600`:'color:var(--dim)';
     const risk=i.risk?`<br><span style="color:var(--red);font-size:11px">${esc(i.risk)}</span>`:'';
     const peak=i.peak_hour>=0?i.peak_hour+'h':'-';
+    const webName=(i.found_names&&i.found_names.length)?i.found_names[0]:'';
+    const webAddr=(i.found_addresses&&i.found_addresses.length)?i.found_addresses[0]:'';
     return `<tr style="cursor:pointer" onclick="showOsintDetail(${start+idx})">
-      <td>${name}</td>
+      <td>${name}${webName&&!name.includes(webName)?`<div style="font-size:11px;color:var(--green)">🔎 ${esc(webName)}</div>`:''}</td>
       <td style="font-family:monospace">${i.normalized||i.raw||'(masqué)'}${risk}</td>
       <td>${typeIcons[i.type]||'?'} ${i.type||''}</td>
       <td style="${opStyle}">${i.operator||'-'}</td>
-      <td>${i.geo||'-'}</td>
+      <td>${i.geo||webAddr||'-'}</td>
       <td><span class="c-green">${i.sms_in}</span> / <span class="c-accent">${i.sms_out}</span></td>
       <td><span class="c-green">${i.calls_in}</span> / <span class="c-accent">${i.calls_out}</span></td>
       <td>${i.calls_missed?`<span class="c-red">${i.calls_missed}</span>`:'-'}</td>
@@ -808,6 +810,11 @@ function showOsintDetail(idx){
       <div class="card"><div class="lbl">Région</div><div>${i.geo||'-'}</div></div>
       <div class="card"><div class="lbl">Pays</div><div>${i.country||'-'}</div></div>
     </div>
+    ${i.found_names&&i.found_names.length?`<div class="sec-alert ok" style="flex-direction:column;align-items:start">
+      <div style="font-weight:700;font-size:15px">🔎 Identité(s) trouvée(s) sur le web</div>
+      ${i.found_names.map(n=>`<div style="font-size:14px;margin-top:4px">👤 <b>${esc(n)}</b></div>`).join('')}
+      ${i.found_addresses&&i.found_addresses.length?i.found_addresses.map(a=>`<div style="font-size:13px;color:var(--dim)">📍 ${esc(a)}</div>`).join(''):''}
+    </div>`:''}
     ${i.annuaire_name||i.entreprise_name?`<div class="row">
       ${i.annuaire_name?`<div class="card"><div class="lbl">📒 Annuaire inversé</div>
         <div style="font-size:16px;font-weight:600;margin-top:4px">${esc(i.annuaire_name)}</div>
@@ -1161,6 +1168,7 @@ function showNumActions(num){
       ${oi.operator?`<span class="dbadge" style="background:var(--surface2);color:${oi.operator_color||'var(--dim)'}">${oi.operator}</span>`:''}
       ${oi.geo?`<span class="dbadge" style="background:var(--surface2)">📍 ${oi.geo}</span>`:''}
     </div>
+    ${oi.found_names&&oi.found_names.length?`<div style="margin-bottom:8px;padding:8px;background:var(--green-dim);border-radius:var(--r-sm)"><div style="font-size:11px;color:var(--green)">🔎 Identité trouvée</div>${oi.found_names.map(n=>`<div style="font-weight:700">${esc(n)}</div>`).join('')}${oi.found_addresses&&oi.found_addresses.length?oi.found_addresses.map(a=>`<div style="font-size:12px;color:var(--dim)">${esc(a)}</div>`).join(''):''}</div>`:''}
     ${oi.entreprise_name?`<div style="margin-bottom:8px;padding:8px;background:var(--surface2);border-radius:var(--r-sm)"><div style="font-size:11px;color:var(--dim)">🏢 Entreprise</div><div style="font-weight:600">${esc(oi.entreprise_name)}</div>${oi.entreprise_address?`<div style="font-size:12px;color:var(--dim)">${esc(oi.entreprise_address)}</div>`:''}</div>`:''}
     ${oi.annuaire_name?`<div style="margin-bottom:8px;padding:8px;background:var(--surface2);border-radius:var(--r-sm)"><div style="font-size:11px;color:var(--dim)">📒 Annuaire</div><div style="font-weight:600">${esc(oi.annuaire_name)}</div></div>`:''}
     ${oi.spam_score>=5?`<div style="margin-bottom:8px;padding:8px;background:var(--red-dim);border-radius:var(--r-sm);color:var(--red)">🚨 Spam score ${oi.spam_score}/9${oi.spam_type?' — '+esc(oi.spam_type):''}</div>`:''}
@@ -1712,26 +1720,69 @@ def analyze_number(num):
         except Exception:
             pass
 
-    # ── Source 7: Web search for mentions (DuckDuckGo HTML, no key) ──
+    # ── Source 7: Web search + deep scrape (DuckDuckGo → annuaires) ──
     info["web_mentions"] = []
+    info["found_names"] = []
+    info["found_addresses"] = []
     try:
         search_q = urllib.parse.quote(local_num)
         url = f"https://html.duckduckgo.com/html/?q={search_q}"
         req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"})
         resp = urllib.request.urlopen(req, timeout=8)
-        html = resp.read().decode("utf-8", errors="ignore")
-        # Extract result titles and URLs
-        for m in re.finditer(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.+?)</a>', html):
+        ddg_html = resp.read().decode("utf-8", errors="ignore")
+
+        for m in re.finditer(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.+?)</a>', ddg_html):
             raw_url = m.group(1)
             title = re.sub(r'<[^>]+>', '', m.group(2)).strip()
-            # DuckDuckGo wraps URLs
-            real_url = ""
             url_match = re.search(r'uddg=([^&]+)', raw_url)
-            if url_match:
-                real_url = urllib.parse.unquote(url_match.group(1))
-            if title and len(info["web_mentions"]) < 5:
-                info["web_mentions"].append({"title": title, "url": real_url or raw_url})
+            real_url = urllib.parse.unquote(url_match.group(1)) if url_match else raw_url
+            if title and len(info["web_mentions"]) < 8:
+                info["web_mentions"].append({"title": title, "url": real_url})
+
+        # Deep scrape: follow annuaire links to extract names/addresses
+        for mention in info["web_mentions"][:3]:
+            page_url = mention.get("url", "")
+            if not page_url or not any(d in page_url for d in
+                ["francy-annu", "118712", "annuaire", "pagesblanches",
+                 "pagesjaunes", "infobel", "1288"]):
+                continue
+            try:
+                req2 = urllib.request.Request(page_url, headers={
+                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"})
+                resp2 = urllib.request.urlopen(req2, timeout=8)
+                page_html = resp2.read().decode("utf-8", errors="ignore")
+
+                # Look for the phone number and extract surrounding name/address
+                num_short = local_num[-6:]  # last 6 digits
+                idx = page_html.find(num_short)
+                if idx > 0:
+                    context = page_html[max(0, idx - 800):idx + 200]
+                    context_clean = re.sub(r'<[^>]+>', ' ', context)
+                    context_clean = re.sub(r'\s+', ' ', context_clean).strip()
+
+                    # Pattern: NAME (uppercase words) before or near the number
+                    names = re.findall(
+                        r'([A-ZÀ-Ÿ][A-ZÀ-Ÿa-zà-ÿ\-]+(?:\s+[A-ZÀ-Ÿ][A-ZÀ-Ÿa-zà-ÿ\-]+){1,3})',
+                        context_clean)
+                    # Filter out generic words
+                    skip_words = {"Trouvez", "Recherche", "Annuaire", "Numéro", "Téléphone",
+                                  "France", "Mobile", "Gratuit", "Propriétaire", "Inverse"}
+                    for name in names:
+                        if not any(w in name for w in skip_words) and len(name) > 4:
+                            if name not in info["found_names"]:
+                                info["found_names"].append(name)
+
+                    # Addresses: look for postal codes (5 digits)
+                    addrs = re.findall(
+                        r'(?:[\w\s\-]+\s)?(\d{5})\s+([A-ZÀ-Ÿ][A-ZÀ-Ÿa-zà-ÿ\s\-]+)',
+                        context_clean)
+                    for cp, ville in addrs:
+                        addr = f"{cp} {ville.strip()}"
+                        if addr not in info["found_addresses"]:
+                            info["found_addresses"].append(addr)
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -1840,6 +1891,8 @@ def build_osint_report(sms_data, calls_data, contacts_data):
             "web_mentions": analysis.get("web_mentions", []),
             "intelx_results": analysis.get("intelx_results", []),
             "intelx_count": analysis.get("intelx_count", 0),
+            "found_names": analysis.get("found_names", []),
+            "found_addresses": analysis.get("found_addresses", []),
         })
 
     report.sort(key=lambda x: x["total_interactions"], reverse=True)
