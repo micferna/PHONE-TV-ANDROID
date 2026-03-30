@@ -86,7 +86,72 @@ init_dirs() {
 
 # ── File Sync ───────────────────────────────────────────────────────
 sync_files() {
-    log "sync_files: not implemented"
+    log "Syncing files..."
+    files_copied=0
+
+    for phone_dir in "${PHONE_DIRS[@]}"; do
+        local remote="/sdcard/$phone_dir"
+        local local_dir="$LATEST_DIR/$phone_dir"
+        mkdir -p "$local_dir"
+
+        # Check if remote dir exists
+        if ! adb -s "$DEVICE_SERIAL" shell "[ -d '$remote' ] && echo ok" 2>/dev/null | grep -q ok; then
+            log "  SKIP: $remote does not exist on device"
+            continue
+        fi
+
+        log "  Scanning $remote ..."
+
+        # Get remote file list with sizes in one shot
+        local remote_list
+        remote_list=$(adb -s "$DEVICE_SERIAL" shell "find '$remote' -type f -exec stat -c '%s %n' {} +" 2>/dev/null || echo "")
+
+        if [ -z "$remote_list" ]; then
+            log "  No files in $remote"
+            continue
+        fi
+
+        local dir_copied=0
+
+        while IFS= read -r line; do
+            # Parse "size /sdcard/DCIM/path/file.jpg"
+            local rsize="${line%% *}"
+            local rpath="${line#* }"
+            # Strip trailing \r from adb output
+            rpath="${rpath%$'\r'}"
+            rsize="${rsize%$'\r'}"
+
+            # Convert remote absolute path to local relative path
+            local relpath="${rpath#/sdcard/}"
+            local lpath="$LATEST_DIR/$relpath"
+
+            # Check if local file exists and has same size
+            if [ -f "$lpath" ]; then
+                local lsize
+                lsize=$(stat -c '%s' "$lpath" 2>/dev/null || echo 0)
+                if [ "$lsize" = "$rsize" ]; then
+                    continue
+                fi
+            fi
+
+            # Pull the file
+            local ldir
+            ldir=$(dirname "$lpath")
+            mkdir -p "$ldir"
+
+            if adb -s "$DEVICE_SERIAL" pull "$rpath" "$lpath" > /dev/null 2>&1; then
+                dir_copied=$(( dir_copied + 1 ))
+                files_copied=$(( files_copied + 1 ))
+            else
+                log "  ERROR pulling $rpath"
+                errors=$(( errors + 1 ))
+            fi
+        done <<< "$remote_list"
+
+        log "  $phone_dir: $dir_copied new/updated files"
+    done
+
+    log "File sync complete: $files_copied files copied"
 }
 
 # ── SMS Export ──────────────────────────────────────────────────────
