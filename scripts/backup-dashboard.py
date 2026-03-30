@@ -761,13 +761,19 @@ function showOsintDetail(idx){
       <div class="card"><div class="lbl">Région</div><div>${i.geo||'-'}</div></div>
       <div class="card"><div class="lbl">Pays</div><div>${i.country||'-'}</div></div>
     </div>
-    ${i.annuaire_name||i.annuaire_address?`<div class="row">
-      <div class="card" style="flex:2"><div class="lbl">📒 Annuaire inversé</div>
-        <div style="font-size:16px;font-weight:600;margin-top:4px">${esc(i.annuaire_name||'-')}</div>
+    ${i.annuaire_name||i.entreprise_name?`<div class="row">
+      ${i.annuaire_name?`<div class="card"><div class="lbl">📒 Annuaire inversé</div>
+        <div style="font-size:16px;font-weight:600;margin-top:4px">${esc(i.annuaire_name)}</div>
         ${i.annuaire_address?`<div style="color:var(--dim);margin-top:2px">📍 ${esc(i.annuaire_address)}</div>`:''}
-      </div>
+      </div>`:''}
+      ${i.entreprise_name?`<div class="card"><div class="lbl">🏢 Entreprise (registre du commerce)</div>
+        <div style="font-size:16px;font-weight:600;margin-top:4px">${esc(i.entreprise_name)}</div>
+        ${i.entreprise_siren?`<div style="color:var(--dim);margin-top:2px">SIREN: ${esc(i.entreprise_siren)}</div>`:''}
+        ${i.entreprise_address?`<div style="color:var(--dim);margin-top:2px">📍 ${esc(i.entreprise_address)}</div>`:''}
+      </div>`:''}
     </div>`:''}
-    ${i.spam_reports?`<div class="sec-alert ${i.spam_score>30?'danger':'warn'}">🚨 ${i.spam_reports} signalements spam sur ce numéro</div>`:''}
+    ${i.spam_score>=5?`<div class="sec-alert ${i.spam_score>=7?'danger':'warn'}">🚨 Score spam: ${i.spam_score}/9 — ${i.spam_reports} recherches${i.spam_type?' — Type: '+esc(i.spam_type):''}</div>`:''}
+    ${i.valid===false?`<div class="sec-alert danger">❌ Numéro invalide selon la base internationale</div>`:''}
     <div class="row">
       <div class="card"><div class="lbl">Total interactions</div><div class="val c-accent">${total}</div></div>
       <div class="card"><div class="lbl">SMS</div><div>📥 ${i.sms_in} reçus / 📤 ${i.sms_out} envoyés</div></div>
@@ -1097,6 +1103,9 @@ function showNumActions(num){
       ${oi.operator?`<span class="dbadge" style="background:var(--surface2);color:${oi.operator_color||'var(--dim)'}">${oi.operator}</span>`:''}
       ${oi.geo?`<span class="dbadge" style="background:var(--surface2)">📍 ${oi.geo}</span>`:''}
     </div>
+    ${oi.entreprise_name?`<div style="margin-bottom:8px;padding:8px;background:var(--surface2);border-radius:var(--r-sm)"><div style="font-size:11px;color:var(--dim)">🏢 Entreprise</div><div style="font-weight:600">${esc(oi.entreprise_name)}</div>${oi.entreprise_address?`<div style="font-size:12px;color:var(--dim)">${esc(oi.entreprise_address)}</div>`:''}</div>`:''}
+    ${oi.annuaire_name?`<div style="margin-bottom:8px;padding:8px;background:var(--surface2);border-radius:var(--r-sm)"><div style="font-size:11px;color:var(--dim)">📒 Annuaire</div><div style="font-weight:600">${esc(oi.annuaire_name)}</div></div>`:''}
+    ${oi.spam_score>=5?`<div style="margin-bottom:8px;padding:8px;background:var(--red-dim);border-radius:var(--r-sm);color:var(--red)">🚨 Spam score ${oi.spam_score}/9${oi.spam_type?' — '+esc(oi.spam_type):''}</div>`:''}
     ${oi.total?`<div style="color:var(--dim);font-size:12px;margin-bottom:12px">💬 ${oi.sms} SMS / 📞 ${oi.calls} appels</div>`:''}
     <div style="display:flex;gap:8px">
       <button onclick="this.parentElement.parentElement.remove();makeQuickCall('${num}')" style="flex:1;padding:10px;border-radius:var(--r);background:var(--green);color:#000;border:none;cursor:pointer;font-weight:600">📞 Appeler</button>
@@ -1199,14 +1208,12 @@ async function livePoll(){
 function osintLookup(num){
   if(!num)return{type:'masked',operator:'',geo:'',total:0,sms:0,calls:0};
   const n=normNum(num);
-  // Search in loaded OSINT data
   const found=osintData.find(o=>o.normalized===n);
-  if(found)return{type:found.type,operator:found.operator,operator_color:found.operator_color,geo:found.geo,
-    total:found.total_interactions,sms:found.sms_in+found.sms_out,calls:found.calls_in+found.calls_out+found.calls_missed,
+  if(found)return{...found,total:found.total_interactions,
+    sms:found.sms_in+found.sms_out,calls:found.calls_in+found.calls_out+found.calls_missed,
     contact:found.contact_name};
-  // Fallback: local analysis
+  // Fallback
   const info=analyzeNumLocal(num);
-  const types={mobile:'📱 Mobile',fixe:'☎️ Fixe',voip:'🌐 VoIP'};
   return{type:info.includes('Mobile')?'mobile':info.includes('Fixe')?'fixe':info.includes('VoIP')?'voip':'',
     operator:'',geo:'',total:0,sms:0,calls:0};
 }
@@ -1385,18 +1392,46 @@ def normalize_number(num):
 
 
 _osint_cache = {}
+OSINT_CACHE_FILE = BACKUP_ROOT / "osint_cache.json"
+
+def _load_osint_cache():
+    global _osint_cache
+    if OSINT_CACHE_FILE.exists():
+        try:
+            _osint_cache = json.loads(OSINT_CACHE_FILE.read_text())
+        except Exception:
+            pass
+
+def _save_osint_cache():
+    try:
+        OSINT_CACHE_FILE.write_text(json.dumps(_osint_cache, ensure_ascii=False, indent=1))
+    except Exception:
+        pass
+
+_load_osint_cache()
+
 
 def analyze_number(num):
-    """OSINT analysis of a French phone number with online lookups."""
+    """Full OSINT analysis: phonenumbers lib + tellows + annuaire + entreprises."""
     norm = normalize_number(num)
 
     if norm in _osint_cache:
         return _osint_cache[norm]
 
+    import urllib.request
+
     info = {"raw": num, "normalized": norm, "country": "", "type": "", "operator": "",
             "operator_color": "", "geo": "", "line": "", "risk": "",
-            "annuaire_name": "", "annuaire_address": "", "spam_score": 0,
-            "spam_reports": 0, "online_profiles": []}
+            "annuaire_name": "", "annuaire_address": "",
+            "spam_score": 0, "spam_reports": 0, "spam_type": "",
+            "entreprise_name": "", "entreprise_siren": "", "entreprise_address": "",
+            "valid": True}
+
+    if not norm or (not norm.startswith('+') and not norm[0].isdigit()):
+        info["type"] = "sms_service"
+        info["line"] = "Service SMS"
+        _osint_cache[norm] = info
+        return info
 
     if not norm.startswith('+33'):
         if norm.startswith('+'):
@@ -1408,90 +1443,123 @@ def analyze_number(num):
         _osint_cache[norm] = info
         return info
 
-    info["country"] = "France (+33)"
-    digits = norm[3:]  # after +33
+    # ── Source 1: phonenumbers (offline, instant, most reliable) ──
+    try:
+        import phonenumbers
+        from phonenumbers import carrier as pn_carrier, geocoder as pn_geocoder
 
-    if len(digits) < 9:
-        info["type"] = "court"
-        _osint_cache[norm] = info
-        return info
+        parsed = phonenumbers.parse(norm)
+        info["valid"] = phonenumbers.is_valid_number(parsed)
 
-    first = digits[0]
-    prefix3 = digits[:3]
-
-    if first in ('6', '7'):
-        info["type"] = "mobile"
-        info["line"] = "Mobile"
-        op = MOBILE_OPERATORS.get(prefix3, "")
-        if not op:
-            for pfx_len in (3, 2):
-                test = digits[:pfx_len]
-                for k, v in MOBILE_OPERATORS.items():
-                    if k.startswith(test):
-                        op = v
-                        break
-                if op:
+        # Carrier
+        op = pn_carrier.name_for_number(parsed, "fr")
+        if op:
+            info["operator"] = op
+            # Normalize operator name for color
+            for key, color in OPERATOR_COLORS.items():
+                if key.lower() in op.lower():
+                    info["operator_color"] = color
                     break
-        info["operator"] = op or "Inconnu"
-        info["operator_color"] = OPERATOR_COLORS.get(op, "#888")
-    elif first in ('1', '2', '3', '4', '5'):
-        info["type"] = "fixe"
-        info["line"] = "Fixe"
-        info["geo"] = GEO_ZONES.get(first, "")
-        info["operator"] = "Fixe régional"
-    elif first == '8':
-        info["type"] = "special"
-        info["line"] = "Numéro spécial"
-        if digits[1] == '0':
-            info["operator"] = "Gratuit (numéro vert)"
-        elif digits[1] in ('1', '2'):
-            info["operator"] = "Surtaxé"
+
+        # Location
+        geo = pn_geocoder.description_for_number(parsed, "fr")
+        if geo and geo != "France":
+            info["geo"] = geo
+
+        info["country"] = "France (+33)"
+
+        # Number type
+        ntype = phonenumbers.number_type(parsed)
+        type_map = {0: "fixe", 1: "mobile", 2: "fixe_ou_mobile", 3: "gratuit",
+                    4: "surtaxe", 5: "partage", 6: "voip", 7: "personnel",
+                    8: "pager", 10: "uan", 27: "urgence"}
+        info["type"] = type_map.get(ntype, "inconnu")
+        line_map = {0: "Fixe", 1: "Mobile", 2: "Fixe/Mobile", 3: "Gratuit",
+                    4: "Surtaxé", 5: "Coût partagé", 6: "VoIP", 27: "Urgence"}
+        info["line"] = line_map.get(ntype, "")
+
+        if ntype == 4:
             info["risk"] = "Numéro surtaxé — attention aux frais"
-        elif digits[1] == '9':
-            info["operator"] = "Non surtaxé"
-    elif first == '9':
-        info["type"] = "voip"
-        info["line"] = "VoIP / Box internet"
-        info["operator"] = "FAI (box)"
-
-    # ── Online OSINT lookups ──
-    import urllib.request
-    local_num = "0" + digits  # format 0XXXXXXXXX
-
-    # 1. Annuaire inversé (pagesjaunes-style scrape)
-    try:
-        url = f"https://www.pagesjaunes.fr/annuaireinverse/recherche?quoiqui={local_num}"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
-        resp = urllib.request.urlopen(req, timeout=8)
-        html = resp.read().decode("utf-8", errors="ignore")
-        # Extract name from results
-        import re as _re
-        name_match = _re.search(r'class="denomination[^"]*"[^>]*>([^<]+)<', html)
-        if name_match:
-            info["annuaire_name"] = name_match.group(1).strip()
-        addr_match = _re.search(r'class="adresse[^"]*"[^>]*>([^<]+)<', html)
-        if addr_match:
-            info["annuaire_address"] = addr_match.group(1).strip()
     except Exception:
-        pass
+        # Fallback: use prefix-based detection
+        digits = norm[3:]
+        first = digits[0] if digits else ""
+        if first in ('6', '7'):
+            info["type"] = "mobile"
+            info["line"] = "Mobile"
+            prefix3 = digits[:3]
+            op = MOBILE_OPERATORS.get(prefix3, "")
+            info["operator"] = op or "Inconnu"
+            info["operator_color"] = OPERATOR_COLORS.get(op, "#888")
+        elif first in ('1', '2', '3', '4', '5'):
+            info["type"] = "fixe"
+            info["line"] = "Fixe"
+            info["geo"] = GEO_ZONES.get(first, "")
+        info["country"] = "France (+33)"
 
-    # 2. Spam check (signalement de numéros)
+    digits = norm[3:]
+    local_num = "0" + digits if len(digits) >= 9 else norm
+
+    # ── Source 2: Tellows (spam score, free API) ──
     try:
-        url = f"https://www.indicatif-telephonique.fr/numero/{local_num}"
+        url = f"http://www.tellows.de/basic/num/{local_num}?json=1&partner=test&apikey=test123"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         resp = urllib.request.urlopen(req, timeout=5)
-        html = resp.read().decode("utf-8", errors="ignore")
-        import re as _re
-        spam_match = _re.search(r'(\d+)\s*(?:signalement|avis)', html, _re.IGNORECASE)
-        if spam_match:
-            info["spam_reports"] = int(spam_match.group(1))
-        if info["spam_reports"] > 5:
-            info["spam_score"] = min(100, info["spam_reports"] * 10)
-            info["risk"] = f"⚠️ {info['spam_reports']} signalements spam"
+        data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        tellows = data.get("tellows", {})
+        score = int(tellows.get("score", 0))
+        searches = int(tellows.get("searches", 0))
+        callertype = tellows.get("callerTypes", {})
+        if isinstance(callertype, list) and callertype:
+            info["spam_type"] = callertype[0].get("Name", "")
+        elif isinstance(callertype, dict):
+            info["spam_type"] = callertype.get("Name", "")
+        info["spam_score"] = score
+        info["spam_reports"] = searches
+        if score >= 7:
+            info["risk"] = f"🚨 Score spam {score}/9 ({searches} recherches) — {info['spam_type']}"
+        elif score >= 5:
+            info["risk"] = f"⚠️ Score spam {score}/9 — possiblement indésirable"
     except Exception:
         pass
 
+    # ── Source 3: Annuaire Entreprises (API gouvernementale, gratuit) ──
+    try:
+        url = f"https://recherche-entreprises.api.gouv.fr/search?q={local_num}&per_page=1"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=5)
+        data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        results = data.get("results", [])
+        if results:
+            r = results[0]
+            info["entreprise_name"] = r.get("nom_complet", "")
+            info["entreprise_siren"] = r.get("siren", "")
+            siege = r.get("siege", {})
+            if siege:
+                parts = [siege.get("adresse", ""), siege.get("code_postal", ""), siege.get("libelle_commune", "")]
+                info["entreprise_address"] = " ".join(p for p in parts if p)
+    except Exception:
+        pass
+
+    # ── Source 4: Pages Blanches scrape (landline subscriber) ──
+    if info["type"] in ("fixe", "fixe_ou_mobile"):
+        try:
+            url = f"https://www.pagesblanches.fr/annuaireinverse/recherche?quoiqui={local_num}"
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
+            resp = urllib.request.urlopen(req, timeout=8)
+            html = resp.read().decode("utf-8", errors="ignore")
+            name_match = re.search(r'class="[^"]*denomination[^"]*"[^>]*>([^<]+)<', html)
+            if name_match:
+                info["annuaire_name"] = name_match.group(1).strip()
+            addr_match = re.search(r'class="[^"]*adresse[^"]*"[^>]*>([^<]+)<', html)
+            if addr_match:
+                info["annuaire_address"] = addr_match.group(1).strip()
+        except Exception:
+            pass
+
     _osint_cache[norm] = info
+    _save_osint_cache()
     return info
 
 
@@ -1570,8 +1638,13 @@ def build_osint_report(sms_data, calls_data, contacts_data):
             "hours": dict(stats["hours"]),
             "annuaire_name": analysis.get("annuaire_name", ""),
             "annuaire_address": analysis.get("annuaire_address", ""),
+            "entreprise_name": analysis.get("entreprise_name", ""),
+            "entreprise_siren": analysis.get("entreprise_siren", ""),
+            "entreprise_address": analysis.get("entreprise_address", ""),
             "spam_reports": analysis.get("spam_reports", 0),
             "spam_score": analysis.get("spam_score", 0),
+            "spam_type": analysis.get("spam_type", ""),
+            "valid": analysis.get("valid", True),
         })
 
     report.sort(key=lambda x: x["total_interactions"], reverse=True)
