@@ -152,6 +152,7 @@ tr:hover td { background:var(--surface2); }
     <button class="tab" data-t="files">📁 Fichiers</button>
     <button class="tab" data-t="apps">📦 Apps</button>
     <button class="tab" data-t="osint">🔍 OSINT</button>
+    <button class="tab" data-t="location">📍 Bornage</button>
     <button class="tab" data-t="live">⚡ Live</button>
     <button class="tab" data-t="logs">📋 Logs</button>
   </div>
@@ -222,6 +223,34 @@ tr:hover td { background:var(--surface2); }
   <div class="pag" id="osint-pag"></div>
   <!-- Detail panel -->
   <div id="osint-detail" style="display:none;margin-top:16px"></div>
+</div>
+
+<!-- ═══ Location / Bornage ═══ -->
+<div class="sec" id="s-location">
+  <div class="row" id="loc-current"></div>
+  <div class="row">
+    <div class="card" style="flex:2">
+      <div class="lbl">Antenne actuelle + voisines</div>
+      <div class="tw" style="margin-top:8px"><table><thead><tr>
+        <th>Status</th><th>Cell ID</th><th>eNodeB</th><th>Secteur</th><th>PCI</th><th>TAC</th><th>Bande</th><th>RSRP</th><th>Signal</th>
+      </tr></thead><tbody id="loc-neighbors"></tbody></table></div>
+    </div>
+    <div class="card" style="flex:1">
+      <div class="lbl">WiFi</div>
+      <div id="loc-wifi" style="margin-top:8px"></div>
+      <div class="lbl" style="margin-top:16px">Signal LTE</div>
+      <div id="loc-signal" style="margin-top:8px"></div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div class="lbl">Historique des antennes (bornage)</div>
+      <button onclick="pollLocation()" style="padding:6px 16px;border-radius:var(--r-sm);background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:12px">🔄 Rafraîchir</button>
+    </div>
+    <div class="tw" style="margin-top:8px"><table><thead><tr>
+      <th>Timestamp</th><th>Cell ID</th><th>eNodeB</th><th>Secteur</th><th>PCI</th><th>TAC</th><th>Opérateur</th><th>EARFCN</th><th>Durée</th>
+    </tr></thead><tbody id="loc-history"></tbody></table></div>
+  </div>
 </div>
 
 <!-- ═══ Live ═══ -->
@@ -581,6 +610,97 @@ function showOsintDetail(idx){
   el.scrollIntoView({behavior:'smooth'});
 }
 
+// ── Location / Bornage ──
+let locInterval=null;
+async function pollLocation(){
+  const data=await f('/api/live/location');
+  if(!data)return;
+  const cell=data.cell||{};
+  const cur=cell.current;
+  const wifi=data.wifi||{};
+
+  // Current cell info
+  if(cur){
+    const sigBars='▂▄▆█'.slice(0,Math.max(1,(cur.signal_level||0)+1));
+    const rsrpColor=cur.rsrp>-90?'var(--green)':cur.rsrp>-110?'var(--orange)':'var(--red)';
+    document.getElementById('loc-current').innerHTML=[
+      `<div class="card"><div class="lbl">Opérateur</div><div class="val c-accent">${cur.operator||'?'}</div><div class="sub">MCC ${cur.mcc} / MNC ${cur.mnc}</div></div>`,
+      `<div class="card"><div class="lbl">Cell ID</div><div class="val c-cyan">${cur.cid}</div><div class="sub">eNodeB ${cur.enb} / Secteur ${cur.sector}</div></div>`,
+      `<div class="card"><div class="lbl">TAC</div><div class="val c-green">${cur.tac}</div></div>`,
+      `<div class="card"><div class="lbl">Bande LTE</div><div class="val c-orange">B${cur.band}</div><div class="sub">EARFCN ${cur.earfcn} / ${cur.bandwidth/1000}MHz</div></div>`,
+      `<div class="card"><div class="lbl">Signal</div><div class="val" style="color:${rsrpColor}">${sigBars} ${cur.rsrp||'?'}dBm</div><div class="sub">RSSI ${cur.rssi||'?'} / RSRQ ${cur.rsrq||'?'}</div></div>`,
+      `<div class="card"><div class="lbl">PCI</div><div class="val c-accent">${cur.pci}</div></div>`,
+    ].join('');
+
+    // Signal gauge
+    const pct=Math.min(100,Math.max(0,((cur.rsrp||0)+140)/60*100));
+    document.getElementById('loc-signal').innerHTML=`
+      <div style="background:var(--surface2);border-radius:var(--r-sm);overflow:hidden;height:20px;margin-top:4px">
+        <div style="height:100%;width:${pct}%;background:${rsrpColor};border-radius:var(--r-sm);transition:width .3s"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-top:2px"><span>-140dBm</span><span>${cur.rsrp||'?'}dBm</span><span>-80dBm</span></div>
+    `;
+  }
+
+  // WiFi
+  if(wifi.ssid){
+    const wifiPct=Math.min(100,Math.max(0,((wifi.rssi||0)+100)/50*100));
+    document.getElementById('loc-wifi').innerHTML=`
+      <div style="font-weight:600;font-size:16px">📶 ${esc(wifi.ssid)}</div>
+      <div style="font-family:monospace;font-size:12px;color:var(--dim);margin-top:4px">BSSID: ${wifi.bssid||'-'}</div>
+      <div style="font-size:12px;color:var(--dim)">RSSI: ${wifi.rssi}dBm / ${wifi.frequency}MHz</div>
+      <div style="background:var(--surface2);border-radius:var(--r-sm);overflow:hidden;height:12px;margin-top:6px">
+        <div style="height:100%;width:${wifiPct}%;background:var(--cyan);border-radius:var(--r-sm)"></div>
+      </div>
+    `;
+  }
+
+  // Neighbors
+  const neighbors=cell.neighbors||[];
+  document.getElementById('loc-neighbors').innerHTML=neighbors.map(n=>{
+    const reg=n.registered;
+    const sigColor=n.rsrp>-90?'var(--green)':n.rsrp>-110?'var(--orange)':'var(--red)';
+    const bars='▂▄▆█'.slice(0,Math.max(1,(n.level||0)+1));
+    return `<tr style="${reg?'background:var(--accent-dim)':''}">
+      <td>${reg?'<span class="badge b-recv">Active</span>':'<span style="color:var(--dim)">Voisine</span>'}</td>
+      <td style="font-family:monospace">${n.cid||'-'}</td>
+      <td>${n.cid?n.cid>>8:'-'}</td>
+      <td>${n.cid?n.cid&0xFF:'-'}</td>
+      <td>${n.pci}</td>
+      <td>${n.tac!==2147483647?n.tac:'-'}</td>
+      <td>EARFCN ${n.earfcn}</td>
+      <td style="color:${sigColor};font-weight:600">${n.rsrp}dBm</td>
+      <td>${bars} (${n.level}/4)</td>
+    </tr>`;
+  }).join('');
+
+  // History
+  const history=cell.history||[];
+  document.getElementById('loc-history').innerHTML=history.map((h,i)=>{
+    const next=history[i+1];
+    let duration='-';
+    if(next){
+      try{
+        const t1=new Date(h.timestamp.replace(' ','T'));
+        const t2=new Date(next.timestamp.replace(' ','T'));
+        const diff=Math.floor((t2-t1)/1000);
+        if(diff<60)duration=diff+'s';
+        else if(diff<3600)duration=Math.floor(diff/60)+'m'+diff%60+'s';
+        else duration=Math.floor(diff/3600)+'h'+Math.floor((diff%3600)/60)+'m';
+      }catch(e){}
+    } else { duration='en cours'; }
+    return `<tr>
+      <td>${h.timestamp}</td>
+      <td style="font-family:monospace">${h.cid}</td>
+      <td>${h.enb}</td><td>${h.sector}</td>
+      <td>${h.pci}</td><td>${h.tac}</td>
+      <td>${h.operator||'?'} (${h.mcc}/${h.mnc})</td>
+      <td>${h.earfcn}</td>
+      <td>${duration}</td>
+    </tr>`;
+  }).join('');
+}
+
 // ── Live ──
 let liveInterval=null;
 let liveSmsEpoch=0, liveCallsEpoch=0;
@@ -658,6 +778,12 @@ document.querySelectorAll('.tab').forEach(t=>{
       if(!liveInterval)liveInterval=setInterval(livePoll,5000);
     } else {
       if(liveInterval){clearInterval(liveInterval);liveInterval=null;}
+    }
+    if(t.dataset.t==='location'){
+      pollLocation();
+      if(!locInterval)locInterval=setInterval(pollLocation,3000);
+    } else {
+      if(locInterval){clearInterval(locInterval);locInterval=null;}
     }
     if(t.dataset.t==='osint'&&!osintData.length)loadOsint();
   };
@@ -978,6 +1104,107 @@ def get_live_calls(since_epoch_ms=0):
     return calls[:30]
 
 
+def get_cell_tower_history():
+    """Extract cell tower history from telephony dump with timestamps."""
+    try:
+        r = subprocess.run(
+            ["adb", "-s", DEVICE_SERIAL, "shell", "dumpsys", "telephony.registry"],
+            capture_output=True, text=True, timeout=15)
+        raw = r.stdout
+    except Exception:
+        return {"current": None, "history": [], "neighbors": []}
+
+    # Parse current cell
+    current = None
+    current_match = re.search(
+        r'mCellIdentity=CellIdentityLte:\{\s*mCi=(\d+)\s+mPci=(\d+)\s+mTac=(\d+)\s+mEarfcn=(\d+)\s+mBands=\[([^\]]*)\]\s+mBandwidth=(\d+)\s+mMcc=(\d+)\s+mMnc=(\d+)\s+mAlphaLong=(\w*)\s+mAlphaShort=(\w*)',
+        raw)
+    if current_match:
+        ci = int(current_match.group(1))
+        current = {
+            "cid": ci, "pci": int(current_match.group(2)),
+            "tac": int(current_match.group(3)), "earfcn": int(current_match.group(4)),
+            "band": current_match.group(5), "bandwidth": int(current_match.group(6)),
+            "mcc": int(current_match.group(7)), "mnc": int(current_match.group(8)),
+            "operator": current_match.group(9),
+            "enb": ci >> 8, "sector": ci & 0xFF,
+        }
+
+    # Parse signal strength
+    sig_match = re.search(r'rssi=(-?\d+)\s+rsrp=(-?\d+)\s+rsrq=(-?\d+).*?level=(\d+)', raw)
+    if sig_match and current:
+        current["rssi"] = int(sig_match.group(1))
+        current["rsrp"] = int(sig_match.group(2))
+        current["rsrq"] = int(sig_match.group(3))
+        current["signal_level"] = int(sig_match.group(4))
+
+    # Parse history of cell changes with timestamps
+    history = []
+    for m in re.finditer(
+        r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.\d+.*?CellIdentityLte:\{\s*mCi=(\d+)\s+mPci=(\d+)\s+mTac=(\d+)\s+mEarfcn=(\d+).*?mMcc=(\d+)\s+mMnc=(\d+)\s+mAlphaLong=(\w*)',
+        raw):
+        ci = int(m.group(2))
+        if ci == 2147483647:  # invalid
+            continue
+        entry = {
+            "timestamp": m.group(1).replace("T", " "),
+            "cid": ci, "pci": int(m.group(3)), "tac": int(m.group(4)),
+            "earfcn": int(m.group(5)), "mcc": int(m.group(6)), "mnc": int(m.group(7)),
+            "operator": m.group(8), "enb": ci >> 8, "sector": ci & 0xFF,
+        }
+        # Deduplicate consecutive same cell
+        if not history or history[-1]["cid"] != ci:
+            history.append(entry)
+
+    # Parse neighbor cells
+    neighbors = []
+    for m in re.finditer(
+        r'CellInfoLte:\{mRegistered=(\w+).*?mCi=(\d+)\s+mPci=(\d+)\s+mTac=(\d+)\s+mEarfcn=(\d+).*?rsrp=(-?\d+).*?level=(\d+)',
+        raw):
+        ci = int(m.group(2))
+        if ci == 2147483647:
+            ci = None
+        neighbors.append({
+            "registered": m.group(1) == "YES",
+            "cid": ci, "pci": int(m.group(3)), "tac": int(m.group(4)),
+            "earfcn": int(m.group(5)), "rsrp": int(m.group(6)),
+            "level": int(m.group(7)),
+        })
+
+    return {"current": current, "history": history, "neighbors": neighbors}
+
+
+def get_live_location():
+    """Get current location + cell + WiFi info."""
+    cell_data = get_cell_tower_history()
+
+    # WiFi info
+    wifi = {}
+    try:
+        r = subprocess.run(
+            ["adb", "-s", DEVICE_SERIAL, "shell", "dumpsys", "wifi"],
+            capture_output=True, text=True, timeout=10)
+        ssid_match = re.search(r'SSID: "([^"]+)"', r.stdout)
+        bssid_match = re.search(r'BSSID: ([0-9a-f:]+)', r.stdout)
+        rssi_match = re.search(r'RSSI: (-?\d+)', r.stdout)
+        freq_match = re.search(r'Frequency: (\d+)', r.stdout)
+        if ssid_match:
+            wifi = {
+                "ssid": ssid_match.group(1),
+                "bssid": bssid_match.group(1) if bssid_match else "",
+                "rssi": int(rssi_match.group(1)) if rssi_match else 0,
+                "frequency": int(freq_match.group(1)) if freq_match else 0,
+            }
+    except Exception:
+        pass
+
+    return {
+        "cell": cell_data,
+        "wifi": wifi,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
 def is_device_connected():
     """Check if device is connected via ADB."""
     try:
@@ -1011,6 +1238,7 @@ class BackupHandler(http.server.BaseHTTPRequestHandler):
             "/api/live/status": lambda: self._json({"connected": is_device_connected()}),
             "/api/live/sms": lambda: self._json(get_live_sms(int(query.get("since", [0])[0]))),
             "/api/live/calls": lambda: self._json(get_live_calls(int(query.get("since", [0])[0]))),
+            "/api/live/location": lambda: self._json(get_live_location()),
         }
 
         if path in routes:
