@@ -32,6 +32,227 @@ def save_config(cfg):
 
 _config = load_config()
 
+
+# ── LLM Analysis via OpenRouter ─────────────────────────────────────
+def llm_analyze(prompt, max_tokens=1000):
+    """Call OpenRouter API with any available model."""
+    api_key = _config.get("openrouter_key", "")
+    if not api_key:
+        return None
+    model = _config.get("openrouter_model", "mistralai/mistral-small-3.1-24b-instruct:free")
+
+    import urllib.request
+    try:
+        payload = json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0.1,
+        }).encode()
+        req = urllib.request.Request(
+            "https://openrouter.ai/api/v1/chat/completions",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "http://localhost:8042",
+            })
+        resp = urllib.request.urlopen(req, timeout=30)
+        data = json.loads(resp.read())
+        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    except Exception as e:
+        return f"Erreur LLM: {e}"
+
+
+def llm_deep_scan(num, web_pages_text, contact_name="", sms_samples=None, call_stats=None):
+    """Use LLM to analyze all OSINT data for a number and produce a structured report."""
+    local = "0" + num[3:] if num.startswith("+33") else num
+
+    prompt = f"""Tu es un analyste OSINT. Analyse toutes les données suivantes sur le numéro de téléphone {num} (format local: {local}).
+
+CONTEXTE:
+- Contact enregistré sous le nom: {contact_name or '(inconnu)'}
+- {f"Statistiques appels: {json.dumps(call_stats)}" if call_stats else ""}
+- {f"Exemples de SMS récents: {json.dumps(sms_samples[:5], ensure_ascii=False)}" if sms_samples else ""}
+
+PAGES WEB MENTIONNANT CE NUMÉRO:
+{web_pages_text[:4000]}
+
+INSTRUCTIONS:
+Réponds en JSON strict avec cette structure:
+{{
+  "identite_probable": "nom complet le plus probable du propriétaire",
+  "confiance": "haute/moyenne/faible",
+  "adresses": ["liste des adresses trouvées"],
+  "emails": ["emails associés si trouvés"],
+  "profil": "résumé en 2-3 phrases: qui est cette personne, activité probable",
+  "alertes": ["liste d'alertes: spam, arnaque, ou rien"],
+  "sources": ["d'où viennent les infos"],
+  "liens_sociaux": ["profils réseaux sociaux si mentionnés"],
+  "entreprise": "nom d'entreprise si applicable"
+}}
+
+Si tu ne trouves pas d'info fiable, mets null. Ne devine pas, base-toi uniquement sur les données fournies."""
+
+    result = llm_analyze(prompt, max_tokens=800)
+    if not result:
+        return None
+
+    # Parse JSON from LLM response
+    try:
+        # Extract JSON block if wrapped in markdown
+        json_match = re.search(r'\{[\s\S]*\}', result)
+        if json_match:
+            return json.loads(json_match.group())
+    except Exception:
+        pass
+    return {"raw_response": result}
+
+
+def deep_scan_number(norm_num):
+    """Run a full deep scan on a number: scrape web + LLM analysis."""
+    import urllib.request
+
+    if not _config.get("openrouter_key"):
+        return {"error": "Clé OpenRouter requise — configure-la dans Settings"}
+
+    # Gather all web page content
+    digits = norm_num[3:] if norm_num.startswith("+33") else norm_num
+    local = "0" + digits if len(digits) >= 9 else norm_num
+    web_text = ""
+
+    # Search DuckDuckGo
+    try:
+        sq = urllib.parse.quote(local)
+        url = f"https://html.duckduckgo.com/html/?q={sq}"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"})
+        resp = urllib.request.urlopen(req, timeout=10)
+        ddg_html = resp.read().decode("utf-8", errors="ignore")
+
+        # Extract result URLs and scrape top results
+        urls_to_scrape = []
+        for m in re.finditer(r'uddg=([^&"]+)', ddg_html):
+            real_url = urllib.parse.unquote(m.group(1))
+            if real_url.startswith("http"):
+                urls_to_scrape.append(real_url)
+
+        for page_url in urls_to_scrape[:5]:
+            try:
+                req2 = urllib.request.Request(page_url, headers={
+                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"})
+                resp2 = urllib.request.urlopen(req2, timeout=8)
+                html = resp2.read().decode("utf-8", errors="ignore")
+                # Clean HTML to text
+                text = re.sub(r'<script[^>]*>[\s\S]*?</script>', '', html)
+                text = re.sub(r'<style[^>]*>[\s\S]*?</style>', '', text)
+                text = re.sub(r'<[^>]+>', ' ', text)
+                text = re.sub(r'\s+', ' ', text).strip()
+                web_text += f"\n\n=== SOURCE: {page_url} ===\n{text[:1500]}"
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Get contact name and SMS samples from backup
+    contact_name = ""
+    sms_samples = []
+    call_stats = None
+
+    contacts = _load_latest_export("contacts")
+    for c in (contacts or []):
+        if normalize_number(c.get("number", "")) == norm_num:
+            contact_name = c.get("display_name", "")
+            break
+
+    sms_data = _load_latest_export("sms")
+    for s in (sms_data or []):
+        if normalize_number(s.get("address", "")) == norm_num:
+            sms_samples.append({"date": s.get("date"), "type": s.get("type"), "body": s.get("body", "")[:100]})
+            if len(sms_samples) >= 5:
+                break
+
+    calls = _load_latest_export("call_log")
+    call_in = sum(1 for c in (calls or []) if normalize_number(c.get("number", "")) == norm_num and c.get("type") == "incoming")
+    call_out = sum(1 for c in (calls or []) if normalize_number(c.get("number", "")) == norm_num and c.get("type") == "outgoing")
+    call_miss = sum(1 for c in (calls or []) if normalize_number(c.get("number", "")) == norm_num and c.get("type") == "missed")
+    if call_in or call_out or call_miss:
+        call_stats = {"entrants": call_in, "sortants": call_out, "manqués": call_miss}
+
+    # Run LLM analysis
+    result = llm_deep_scan(norm_num, web_text, contact_name, sms_samples, call_stats)
+    if result:
+        # Cache the deep scan result
+        cache_key = f"deepscan_{norm_num}"
+        _osint_cache[cache_key] = result
+        _save_osint_cache()
+    return result
+
+
+def _load_latest_export(prefix):
+    """Helper: load latest export file."""
+    files = sorted(EXPORTS_DIR.glob(f"{prefix}_*.json"), reverse=True)
+    if not files:
+        return []
+    try:
+        return json.loads(files[0].read_text())
+    except Exception:
+        return []
+
+
+def build_relationship_graph(sms_data, calls_data, contacts_data):
+    """Build a graph of relationships between phone numbers."""
+    contact_map = {}
+    for c in (contacts_data or []):
+        if c.get("number"):
+            contact_map[normalize_number(c["number"])] = c.get("display_name", "")
+
+    nodes = {}  # num -> {name, sms, calls, ...}
+    edges = []  # [{from, to, weight, type}]
+
+    my_num = "MOI"
+    nodes[my_num] = {"id": my_num, "label": "Mon téléphone", "group": "self", "size": 30}
+
+    all_nums = defaultdict(lambda: {"sms": 0, "calls": 0, "duration": 0})
+
+    for s in (sms_data or []):
+        n = normalize_number(s.get("address", ""))
+        if n:
+            all_nums[n]["sms"] += 1
+
+    for c in (calls_data or []):
+        n = normalize_number(c.get("number", ""))
+        if n:
+            all_nums[n]["calls"] += 1
+            all_nums[n]["duration"] += c.get("duration_sec", 0)
+
+    for num, stats in all_nums.items():
+        total = stats["sms"] + stats["calls"]
+        if total < 2:
+            continue  # Skip very low interaction numbers
+        name = contact_map.get(num, "")
+        label = name or (num[-4:] if num.startswith("+") else num)  # Full name for services
+
+        # Determine group by interaction level
+        if total > 50:
+            group = "frequent"
+        elif total > 10:
+            group = "regular"
+        else:
+            group = "occasional"
+
+        nodes[num] = {
+            "id": num, "label": label, "group": group,
+            "size": min(25, max(8, total // 3)),
+            "title": f"{name or num}\n{stats['sms']} SMS / {stats['calls']} appels",
+        }
+        edges.append({
+            "from": my_num, "to": num,
+            "value": total, "title": f"{stats['sms']} SMS, {stats['calls']} appels",
+        })
+
+    return {"nodes": list(nodes.values()), "edges": edges}
+
 DASHBOARD_HTML = r"""<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -40,6 +261,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <title>Phone Backup Dashboard</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
 <style>
 :root {
   --bg: #0c0d12; --surface: #151720; --surface2: #1c1f2e; --surface3: #242840;
@@ -178,6 +400,7 @@ tr:hover td { background:var(--surface2); }
     <button class="tab" data-t="apps">📦 Apps</button>
     <button class="tab" data-t="osint">🔍 OSINT</button>
     <button class="tab" data-t="location">📍 Bornage</button>
+    <button class="tab" data-t="graph">🕸️ Graphe</button>
     <button class="tab" data-t="live">⚡ Live</button>
     <button class="tab" data-t="logs">📋 Logs</button>
     <button class="tab" data-t="settings">⚙️</button>
@@ -296,6 +519,24 @@ tr:hover td { background:var(--surface2); }
   </div>
 </div>
 
+<!-- ═══ Graphe ═══ -->
+<div class="sec" id="s-graph">
+  <div class="card" style="margin-bottom:12px;padding:0;overflow:hidden">
+    <div id="graph-container" style="height:600px;width:100%"></div>
+  </div>
+  <div class="row">
+    <div class="card"><div class="lbl">Légende</div>
+      <div style="margin-top:8px;display:flex;gap:16px;flex-wrap:wrap;font-size:13px">
+        <span>🔵 <b>Mon tel</b></span>
+        <span style="color:#e74c3c">● Fréquent (50+)</span>
+        <span style="color:#f39c12">● Régulier (10-50)</span>
+        <span style="color:#95a5a6">● Occasionnel</span>
+      </div>
+      <div style="margin-top:4px;font-size:12px;color:var(--dim)">Taille = nombre d'interactions / Épaisseur = volume SMS+appels</div>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ Live ═══ -->
 <div class="sec" id="s-live">
   <div class="row">
@@ -357,6 +598,20 @@ tr:hover td { background:var(--surface2); }
         <div class="lbl">Intelligence X — Fuites de données / darknet</div>
         <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Inscription: <a href="https://intelx.io" target="_blank" style="color:var(--accent)">intelx.io</a> → 10 recherches/jour gratuit</div>
         <input class="search" id="cfg-intelx" placeholder="Clé Intelligence X..." style="margin:0">
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
+        <div class="lbl">🤖 OpenRouter — Analyse IA (Deep Scan)</div>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Inscription: <a href="https://openrouter.ai" target="_blank" style="color:var(--accent)">openrouter.ai</a> → modèles gratuits disponibles (Mistral, Llama...)</div>
+        <input class="search" id="cfg-openrouter" placeholder="Clé OpenRouter (sk-or-...)..." style="margin:0">
+        <div style="margin-top:6px">
+          <div class="lbl">Modèle</div>
+          <select id="cfg-model" class="search" style="margin:0;padding:8px">
+            <option value="mistralai/mistral-small-3.1-24b-instruct:free">Mistral Small 3.1 (gratuit)</option>
+            <option value="meta-llama/llama-4-scout:free">Llama 4 Scout (gratuit)</option>
+            <option value="google/gemini-2.5-flash-preview:free">Gemini 2.5 Flash (gratuit)</option>
+            <option value="anthropic/claude-sonnet-4">Claude Sonnet 4 (payant)</option>
+          </select>
+        </div>
       </div>
     </div>
     <button onclick="saveConfig()" style="margin-top:16px;padding:10px 24px;border-radius:var(--r);background:var(--accent);color:#fff;border:none;cursor:pointer;font-weight:600">💾 Sauvegarder</button>
@@ -839,10 +1094,12 @@ function showOsintDetail(idx){
       <div class="card"><div class="lbl">Dernière interaction</div><div>${dateFR(i.last_seen)}</div></div>
       <div class="card"><div class="lbl">Heure de pic</div><div>${i.peak_hour>=0?i.peak_hour+'h':'-'}</div></div>
     </div>
-    <div style="margin-top:12px;display:flex;gap:8px">
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
       <button onclick="makeQuickCall('${i.normalized}')" style="padding:8px 16px;border-radius:var(--r-sm);background:var(--green);color:#000;border:none;cursor:pointer;font-weight:600">📞 Appeler</button>
       <button onclick="openConvForNum('${i.normalized}')" style="padding:8px 16px;border-radius:var(--r-sm);background:var(--accent);color:#fff;border:none;cursor:pointer;font-weight:600">💬 Voir SMS</button>
+      <button onclick="deepScan('${i.normalized}',this)" style="padding:8px 16px;border-radius:var(--r-sm);background:var(--orange);color:#000;border:none;cursor:pointer;font-weight:600">🤖 Deep Scan IA</button>
     </div>
+    <div id="deepscan-result-${idx}" style="margin-top:12px"></div>
     <div style="margin-top:12px"><div class="lbl" style="margin-bottom:8px">Activité par heure</div>${heatmap}</div>
     ${i.scam_reports?`<div class="sec-alert danger">🚫 ${i.scam_reports} signalement(s) arnaque sur signal-arnaques.com</div>`:''}
     ${i.intelx_count?`<div class="row"><div class="card"><div class="lbl">🔓 Intelligence X — Fuites de données</div>
@@ -1371,8 +1628,62 @@ document.querySelectorAll('.tab').forEach(t=>{
       if(locInterval){clearInterval(locInterval);locInterval=null;}
     }
     if(t.dataset.t==='osint'&&!osintData.length)loadOsint();
+    if(t.dataset.t==='graph')renderGraph();
+    if(t.dataset.t==='settings')updateSourcesList();
   };
 });
+
+// ── Deep Scan ──
+async function deepScan(num,btn){
+  btn.disabled=true;btn.textContent='🤖 Analyse en cours...';
+  const el=btn.parentElement.nextElementSibling;
+  el.innerHTML='<div style="color:var(--orange)">⏳ Le LLM analyse les pages web, SMS et appels...</div>';
+  const r=await fetch('/api/osint/deepscan?num='+encodeURIComponent(num)).then(r=>r.json()).catch(e=>({error:e.message}));
+  btn.disabled=false;btn.textContent='🤖 Deep Scan IA';
+  if(r.error){el.innerHTML=`<div class="sec-alert warn">${esc(r.error)}</div>`;return;}
+  if(r.raw_response){el.innerHTML=`<div class="card"><div class="lbl">Réponse brute</div><pre style="white-space:pre-wrap;font-size:12px">${esc(r.raw_response)}</pre></div>`;return;}
+  el.innerHTML=`<div class="card" style="border:1px solid var(--green);border-left:4px solid var(--green)">
+    <div style="font-size:11px;color:var(--green);font-weight:600;margin-bottom:8px">🤖 ANALYSE IA</div>
+    ${r.identite_probable?`<div style="font-size:18px;font-weight:700;margin-bottom:4px">👤 ${esc(r.identite_probable)}</div><div style="font-size:12px;color:var(--dim);margin-bottom:8px">Confiance: ${esc(r.confiance||'?')}</div>`:''}
+    ${r.profil?`<div style="margin-bottom:8px;font-size:13px">${esc(r.profil)}</div>`:''}
+    ${r.adresses&&r.adresses.length?`<div style="margin-bottom:6px">${r.adresses.filter(a=>a).map(a=>`<div style="font-size:13px">📍 ${esc(a)}</div>`).join('')}</div>`:''}
+    ${r.emails&&r.emails.length?`<div style="margin-bottom:6px">${r.emails.filter(e=>e).map(e=>`<div style="font-size:13px;font-family:monospace">📧 ${esc(e)}</div>`).join('')}</div>`:''}
+    ${r.entreprise?`<div style="margin-bottom:6px;font-size:13px">🏢 ${esc(r.entreprise)}</div>`:''}
+    ${r.liens_sociaux&&r.liens_sociaux.length?`<div style="margin-bottom:6px">${r.liens_sociaux.filter(l=>l).map(l=>`<div style="font-size:13px">🔗 ${esc(l)}</div>`).join('')}</div>`:''}
+    ${r.alertes&&r.alertes.length?`<div style="margin-top:8px">${r.alertes.filter(a=>a).map(a=>`<div class="sec-alert ${a.toLowerCase().includes('rien')||a.toLowerCase().includes('aucun')?'ok':'warn'}">${esc(a)}</div>`).join('')}</div>`:''}
+    ${r.sources&&r.sources.length?`<div style="margin-top:8px;font-size:11px;color:var(--dim)">Sources: ${r.sources.join(', ')}</div>`:''}
+  </div>`;
+}
+
+// ── Graphe de relations ──
+let graphNetwork=null;
+async function renderGraph(){
+  const data=await f('/api/graph');
+  if(!data)return;
+  const container=document.getElementById('graph-container');
+  const groupColors={
+    self:{background:'#7c8aff',border:'#5c6adf',font:{color:'#fff'}},
+    frequent:{background:'#e74c3c',border:'#c0392b',font:{color:'#fff'}},
+    regular:{background:'#f39c12',border:'#d68910',font:{color:'#000'}},
+    occasional:{background:'#555',border:'#444',font:{color:'#ccc'}},
+  };
+  const options={
+    nodes:{shape:'dot',font:{size:12,face:'Inter, sans-serif'}},
+    edges:{color:{color:'#2d3244',highlight:'#7c8aff'},smooth:{type:'continuous'}},
+    groups:groupColors,
+    physics:{barnesHut:{gravitationalConstant:-3000,centralGravity:0.3,springLength:120,damping:0.3}},
+    interaction:{hover:true,tooltipDelay:100},
+  };
+  if(graphNetwork)graphNetwork.destroy();
+  graphNetwork=new vis.Network(container,{nodes:new vis.DataSet(data.nodes),edges:new vis.DataSet(data.edges)},options);
+  // Click on node → show OSINT
+  graphNetwork.on('click',function(params){
+    if(params.nodes.length){
+      const nodeId=params.nodes[0];
+      if(nodeId!=='MOI')showNumActions(nodeId);
+    }
+  });
+}
 
 // ── Settings ──
 async function saveConfig(){
@@ -1380,6 +1691,8 @@ async function saveConfig(){
     opencellid_key:document.getElementById('cfg-opencellid').value.trim(),
     numverify_key:document.getElementById('cfg-numverify').value.trim(),
     intelx_key:document.getElementById('cfg-intelx').value.trim(),
+    openrouter_key:document.getElementById('cfg-openrouter').value.trim(),
+    openrouter_model:document.getElementById('cfg-model').value,
   };
   const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)}).then(r=>r.json()).catch(()=>({ok:false}));
   const st=document.getElementById('cfg-status');
@@ -1400,6 +1713,7 @@ function updateSourcesList(){
     {name:'OpenCelliD',desc:'Géolocalisation antennes → carte',status:document.getElementById('cfg-opencellid').value?'configured':'needs_key',color:document.getElementById('cfg-opencellid').value?'var(--green)':'var(--dim)'},
     {name:'NumVerify',desc:'Validation + carrier détaillé',status:document.getElementById('cfg-numverify').value?'configured':'needs_key',color:document.getElementById('cfg-numverify').value?'var(--green)':'var(--dim)'},
     {name:'Intelligence X',desc:'Fuites de données, darknet',status:document.getElementById('cfg-intelx').value?'configured':'needs_key',color:document.getElementById('cfg-intelx').value?'var(--green)':'var(--dim)'},
+    {name:'OpenRouter (IA)',desc:'Deep scan LLM — analyse croisée des sources',status:document.getElementById('cfg-openrouter').value?'configured':'needs_key',color:document.getElementById('cfg-openrouter').value?'var(--green)':'var(--dim)'},
   ];
   document.getElementById('osint-sources').innerHTML=sources.map(s=>`
     <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
@@ -1412,9 +1726,11 @@ function updateSourcesList(){
 init();
 // Load settings state
 fetch('/api/config').then(r=>r.json()).then(cfg=>{
-  if(cfg.opencellid_key)document.getElementById('cfg-opencellid').value=cfg.opencellid_key==='***'?'':cfg.opencellid_key;
-  if(cfg.numverify_key)document.getElementById('cfg-numverify').value=cfg.numverify_key==='***'?'':cfg.numverify_key;
-  if(cfg.intelx_key)document.getElementById('cfg-intelx').value=cfg.intelx_key==='***'?'':cfg.intelx_key;
+  if(cfg.opencellid_key&&cfg.opencellid_key!=='***')document.getElementById('cfg-opencellid').value=cfg.opencellid_key;
+  if(cfg.numverify_key&&cfg.numverify_key!=='***')document.getElementById('cfg-numverify').value=cfg.numverify_key;
+  if(cfg.intelx_key&&cfg.intelx_key!=='***')document.getElementById('cfg-intelx').value=cfg.intelx_key;
+  if(cfg.openrouter_key&&cfg.openrouter_key!=='***')document.getElementById('cfg-openrouter').value=cfg.openrouter_key;
+  if(cfg.openrouter_model)document.getElementById('cfg-model').value=cfg.openrouter_model;
   updateSourcesList();
 }).catch(()=>{updateSourcesList();});
 </script>
@@ -2520,6 +2836,9 @@ class BackupHandler(http.server.BaseHTTPRequestHandler):
             "/api/location/history": lambda: self._json(load_location_history()),
             "/api/location/extract": lambda: self._json({"count": len(extract_all_locations())}),
             "/api/config": lambda: self._json({k: ("***" if "key" in k and v else v) for k, v in _config.items()}),
+            "/api/osint/deepscan": lambda: self._json(deep_scan_number(query.get("num", [""])[0])),
+            "/api/graph": lambda: self._json(build_relationship_graph(
+                self._load_export("sms"), self._load_export("call_log"), self._load_export("contacts"))),
         }
 
         if path in routes:
