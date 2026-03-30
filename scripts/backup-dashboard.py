@@ -290,6 +290,14 @@ tr:hover td { background:var(--surface2); }
       <button onclick="apiCallAction('answer')" style="padding:10px 20px;border-radius:var(--r);background:var(--green);color:#000;border:none;cursor:pointer;font-size:13px;font-weight:600">📞 Décrocher</button>
       <button onclick="apiCallAction('hangup')" style="padding:10px 20px;border-radius:var(--r);background:var(--red);color:#fff;border:none;cursor:pointer;font-size:13px;font-weight:600">📵 Raccrocher</button>
     </div>
+    <div class="card">
+      <div class="lbl">Passer un appel</div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <input class="search" id="call-number" placeholder="+33..." style="margin:0;flex:1">
+        <button onclick="makeCallFromDash()" style="padding:8px 20px;border-radius:var(--r);background:var(--green);color:#000;border:none;cursor:pointer;font-weight:600">📞 Appeler</button>
+      </div>
+      <div id="call-status" style="font-size:11px;margin-top:4px;min-height:14px"></div>
+    </div>
   </div>
   <div class="row">
     <div class="card" style="flex:1">
@@ -1033,35 +1041,60 @@ async function livePoll(){
     const name=resolveName(s.address)||s.address;
     const cls=s.type==='sent'?'b-sent':'b-recv';
     const lbl=s.type==='sent'?'→':'←';
-    const osint=analyzeNumLocal(s.address);
+    const oi=osintLookup(s.address);
+    const opTag=oi.operator?`<span style="color:${oi.operator_color||'var(--dim)'};font-size:10px;font-weight:600">${oi.operator}</span>`:'';
     return `<div style="padding:8px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:start">
       <span class="badge ${cls}" style="min-width:20px;text-align:center">${lbl}</span>
       <div style="flex:1">
-        <div style="display:flex;justify-content:space-between">
-          <b>${esc(name)}</b>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><b>${esc(name)}</b> ${opTag}</div>
           <span style="font-size:11px;color:var(--dim)">${dateFRShort(s.date)}</span>
         </div>
         <div style="font-size:13px;margin-top:2px">${esc(s.body||'')}</div>
-        <div style="font-size:10px;color:var(--dim);margin-top:2px">${osint}</div>
       </div>
     </div>`;
   }).join('')||'<div style="color:var(--dim);padding:20px;text-align:center">Aucun SMS récent</div>';
 
-  // Render live calls
+  // Render live calls with full OSINT
   document.getElementById('live-calls').innerHTML=calls.map(c=>{
-    const name=c.name||resolveName(c.number)||c.number||'(masqué)';
+    const name=c.name||resolveName(c.number)||'';
     const badgeCls={incoming:'b-recv',outgoing:'b-sent',missed:'b-miss'}[c.type]||'';
-    const typeLabel={incoming:'📥 Entrant',outgoing:'📤 Sortant',missed:'❌ Manqué'}[c.type]||c.type;
-    const osint=analyzeNumLocal(c.number);
-    return `<div style="padding:8px;border-bottom:1px solid var(--border)">
+    const typeLabel={incoming:'📥 Entrant',outgoing:'📤 Sortant',missed:'❌ Manqué',voicemail:'📩 Messagerie',rejected:'🚫 Rejeté'}[c.type]||c.type;
+    const oi=osintLookup(c.number);
+    const opColor=oi.operator_color||'var(--dim)';
+    return `<div style="padding:10px;border-bottom:1px solid var(--border)">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <div><b>${esc(name)}</b> <span style="font-family:monospace;font-size:12px;color:var(--dim)">${c.number||''}</span></div>
+        <div>
+          <b style="font-size:15px">${esc(name||c.number||'Masqué')}</b>
+          ${name?`<span style="font-family:monospace;font-size:12px;color:var(--dim);margin-left:6px">${c.number||''}</span>`:''}
+        </div>
         <span class="badge ${badgeCls}">${typeLabel}</span>
       </div>
-      <div style="font-size:12px;color:var(--dim);margin-top:2px">${dateFRShort(c.date)} — ${fmtDur(c.duration_sec)}</div>
-      <div style="font-size:10px;color:var(--dim);margin-top:2px">${osint}</div>
+      <div style="font-size:12px;color:var(--dim);margin-top:4px">${dateFRShort(c.date)} — ${fmtDur(c.duration_sec)}</div>
+      <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+        ${oi.type?`<span class="dbadge" style="background:var(--surface2);font-size:10px">${{mobile:'📱 Mobile',fixe:'☎️ Fixe',voip:'🌐 VoIP',special:'⚠️ Spécial',masked:'👻 Masqué'}[oi.type]||oi.type}</span>`:''}
+        ${oi.operator?`<span class="dbadge" style="background:var(--surface2);color:${opColor};font-size:10px">${oi.operator}</span>`:''}
+        ${oi.geo?`<span class="dbadge" style="background:var(--surface2);font-size:10px">📍 ${oi.geo}</span>`:''}
+        ${oi.total>0?`<span class="dbadge" style="background:var(--surface2);font-size:10px">💬${oi.sms} 📞${oi.calls}</span>`:''}
+      </div>
     </div>`;
   }).join('')||'<div style="color:var(--dim);padding:20px;text-align:center">Aucun appel récent</div>';
+}
+
+// Full OSINT lookup from cached data
+function osintLookup(num){
+  if(!num)return{type:'masked',operator:'',geo:'',total:0,sms:0,calls:0};
+  const n=normNum(num);
+  // Search in loaded OSINT data
+  const found=osintData.find(o=>o.normalized===n);
+  if(found)return{type:found.type,operator:found.operator,operator_color:found.operator_color,geo:found.geo,
+    total:found.total_interactions,sms:found.sms_in+found.sms_out,calls:found.calls_in+found.calls_out+found.calls_missed,
+    contact:found.contact_name};
+  // Fallback: local analysis
+  const info=analyzeNumLocal(num);
+  const types={mobile:'📱 Mobile',fixe:'☎️ Fixe',voip:'🌐 VoIP'};
+  return{type:info.includes('Mobile')?'mobile':info.includes('Fixe')?'fixe':info.includes('VoIP')?'voip':'',
+    operator:'',geo:'',total:0,sms:0,calls:0};
 }
 
 // Local OSINT mini-analysis for display
@@ -1121,6 +1154,16 @@ async function apiCallAction(action){
   const r=await fetch('/api/call/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(r=>r.json()).catch(()=>({ok:false}));
   if(r.ok)livePoll();
 }
+async function makeCallFromDash(){
+  const num=document.getElementById('call-number').value.trim();
+  if(!num)return;
+  const st=document.getElementById('call-status');
+  st.innerHTML='<span style="color:var(--orange)">Appel en cours...</span>';
+  const r=await fetch('/api/call/make',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({number:num})}).then(r=>r.json()).catch(e=>({ok:false,error:e.message}));
+  if(r.ok){st.innerHTML=`<span style="color:var(--green)">📞 ${esc(r.message)}</span>`;}
+  else{st.innerHTML=`<span style="color:var(--red)">✗ ${esc(r.error||'Erreur')}</span>`;}
+}
+document.getElementById('call-number').addEventListener('keydown',e=>{if(e.key==='Enter')makeCallFromDash();});
 
 // Start live polling when Live tab is active
 document.querySelectorAll('.tab').forEach(t=>{
@@ -1845,6 +1888,22 @@ def send_sms(to, body):
         return {"ok": False, "error": str(e)}
 
 
+def make_call(number):
+    """Initiate a call via ADB."""
+    if not number:
+        return {"ok": False, "error": "Numéro requis"}
+    if not is_device_connected():
+        return {"ok": False, "error": "Téléphone non connecté"}
+    try:
+        subprocess.run([
+            "adb", "-s", DEVICE_SERIAL, "shell",
+            "am", "start", "-a", "android.intent.action.CALL", "-d", f"tel:{number}",
+        ], capture_output=True, timeout=5)
+        return {"ok": True, "message": f"Appel vers {number}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def answer_call():
     """Answer incoming call via ADB."""
     try:
@@ -1889,6 +1948,8 @@ class BackupHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/sms/send":
             result = send_sms(body.get("to", ""), body.get("body", ""))
             self._json(result)
+        elif path == "/api/call/make":
+            self._json(make_call(body.get("number", "")))
         elif path == "/api/call/answer":
             self._json(answer_call())
         elif path == "/api/call/hangup":
