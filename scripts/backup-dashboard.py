@@ -181,6 +181,13 @@ tr:hover td { background:var(--surface2); }
       <div class="conv-empty" id="conv-empty">Sélectionne une conversation</div>
       <div id="conv-header" class="conv-header" style="display:none"></div>
       <div id="conv-messages" class="conv-messages" style="display:none"></div>
+      <div id="conv-reply" style="display:none;padding:10px 16px;background:var(--surface);border-top:1px solid var(--border);display:none">
+        <div style="display:flex;gap:8px">
+          <input class="search" id="reply-input" placeholder="Écrire un message..." style="margin:0;flex:1">
+          <button id="reply-btn" onclick="sendReply()" style="padding:8px 20px;border-radius:var(--r);background:var(--accent);color:#fff;border:none;cursor:pointer;font-weight:600;white-space:nowrap">Envoyer ✈</button>
+        </div>
+        <div id="reply-status" style="font-size:11px;margin-top:4px;min-height:16px"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -258,12 +265,25 @@ tr:hover td { background:var(--surface2); }
   <div class="row">
     <div class="card"><div class="lbl">Status</div><div class="val" id="live-status" style="font-size:16px">...</div></div>
     <div class="card"><div class="lbl">Dernier refresh</div><div class="val" id="live-time" style="font-size:16px">-</div></div>
-    <div class="card" style="display:flex;align-items:center;justify-content:center">
-      <button onclick="livePoll()" style="padding:10px 24px;border-radius:var(--r);background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:14px;font-weight:600">🔄 Rafraîchir</button>
+    <div class="card" style="display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap">
+      <button onclick="livePoll()" style="padding:10px 20px;border-radius:var(--r);background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:13px;font-weight:600">🔄 Rafraîchir</button>
+      <button onclick="apiCallAction('answer')" style="padding:10px 20px;border-radius:var(--r);background:var(--green);color:#000;border:none;cursor:pointer;font-size:13px;font-weight:600">📞 Décrocher</button>
+      <button onclick="apiCallAction('hangup')" style="padding:10px 20px;border-radius:var(--r);background:var(--red);color:#fff;border:none;cursor:pointer;font-size:13px;font-weight:600">📵 Raccrocher</button>
     </div>
   </div>
   <div class="row">
-    <div class="card" style="flex:1"><div class="lbl">💬 Derniers SMS (live)</div><div id="live-sms" style="margin-top:8px;max-height:400px;overflow-y:auto"></div></div>
+    <div class="card" style="flex:1">
+      <div class="lbl">💬 Derniers SMS (live)</div>
+      <div style="margin-top:8px;padding:8px;background:var(--surface2);border-radius:var(--r);margin-bottom:8px">
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <input class="search" id="quick-sms-to" placeholder="+33..." style="margin:0;width:140px">
+          <input class="search" id="quick-sms-body" placeholder="Message..." style="margin:0;flex:1">
+          <button onclick="quickSendSms()" style="padding:6px 14px;border-radius:var(--r-sm);background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:12px;font-weight:600">✈</button>
+        </div>
+        <div id="quick-sms-status" style="font-size:11px;min-height:14px"></div>
+      </div>
+      <div id="live-sms" style="max-height:350px;overflow-y:auto"></div>
+    </div>
     <div class="card" style="flex:1"><div class="lbl">📞 Derniers appels (live)</div><div id="live-calls" style="margin-top:8px;max-height:400px;overflow-y:auto"></div></div>
   </div>
 </div>
@@ -405,6 +425,8 @@ function openConversation(numKey,convs){
   document.getElementById('conv-empty').style.display='none';
   document.getElementById('conv-header').style.display='';
   document.getElementById('conv-messages').style.display='';
+  document.getElementById('conv-reply').style.display='';
+  replyNumber=conv.number;
 
   document.getElementById('conv-header').innerHTML=`<h3>${esc(conv.name||conv.number)}</h3><div class="sub">${conv.number} — ${conv.messages.length} messages</div>`;
 
@@ -766,6 +788,49 @@ function analyzeNumLocal(num){
   if(d[0]==='8')return'⚠️ Numéro spécial';
   if(d[0]==='9')return'🌐 VoIP';
   return'';
+}
+
+// ── SMS Reply ──
+let replyNumber='';
+async function sendReply(){
+  const input=document.getElementById('reply-input');
+  const body=input.value.trim();
+  if(!body||!replyNumber)return;
+  const status=document.getElementById('reply-status');
+  status.innerHTML='<span style="color:var(--orange)">Envoi en cours...</span>';
+  const r=await fetch('/api/sms/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:replyNumber,body})}).then(r=>r.json()).catch(e=>({ok:false,error:e.message}));
+  if(r.ok){
+    status.innerHTML='<span style="color:var(--green)">✓ Envoyé</span>';
+    input.value='';
+    setTimeout(()=>{status.innerHTML='';},3000);
+  } else {
+    status.innerHTML=`<span style="color:var(--red)">✗ ${esc(r.error||'Erreur')}</span>`;
+  }
+}
+document.getElementById('reply-input').addEventListener('keydown',e=>{if(e.key==='Enter')sendReply();});
+
+// ── Quick SMS from Live ──
+async function quickSendSms(){
+  const to=document.getElementById('quick-sms-to').value.trim();
+  const body=document.getElementById('quick-sms-body').value.trim();
+  if(!to||!body)return;
+  const status=document.getElementById('quick-sms-status');
+  status.innerHTML='<span style="color:var(--orange)">Envoi...</span>';
+  const r=await fetch('/api/sms/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to,body})}).then(r=>r.json()).catch(e=>({ok:false,error:e.message}));
+  if(r.ok){
+    status.innerHTML='<span style="color:var(--green)">✓ Envoyé à '+esc(to)+'</span>';
+    document.getElementById('quick-sms-body').value='';
+    setTimeout(()=>{status.innerHTML='';livePoll();},2000);
+  } else {
+    status.innerHTML=`<span style="color:var(--red)">✗ ${esc(r.error||'Erreur')}</span>`;
+  }
+}
+document.getElementById('quick-sms-body').addEventListener('keydown',e=>{if(e.key==='Enter')quickSendSms();});
+
+// ── Call Actions ──
+async function apiCallAction(action){
+  const r=await fetch('/api/call/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(r=>r.json()).catch(()=>({ok:false}));
+  if(r.ok)livePoll();
 }
 
 // Start live polling when Live tab is active
@@ -1205,6 +1270,92 @@ def get_live_location():
     }
 
 
+def send_sms(to, body):
+    """Send SMS via ADB: open compose + tap send button."""
+    if not to or not body:
+        return {"ok": False, "error": "Numéro et message requis"}
+    if not is_device_connected():
+        return {"ok": False, "error": "Téléphone non connecté"}
+
+    try:
+        # Step 1: Open SMS compose with pre-filled message
+        subprocess.run([
+            "adb", "-s", DEVICE_SERIAL, "shell",
+            "am", "start", "-a", "android.intent.action.SENDTO",
+            "-d", f"smsto:{to}",
+            "--es", "sms_body", body,
+            "--ez", "exit_on_sent", "true",
+        ], capture_output=True, timeout=5)
+
+        import time
+        time.sleep(2)  # Wait for SMS app to load
+
+        # Step 2: Find send button dynamically
+        r = subprocess.run([
+            "adb", "-s", DEVICE_SERIAL, "shell",
+            "uiautomator", "dump", "/sdcard/ui.xml",
+        ], capture_output=True, timeout=5)
+        r2 = subprocess.run([
+            "adb", "-s", DEVICE_SERIAL, "shell", "cat", "/sdcard/ui.xml",
+        ], capture_output=True, text=True, timeout=5)
+
+        xml = r2.stdout
+        send_match = re.search(
+            r'content-desc="[^"]*(?:[Ee]nvoyer|[Ss]end)[^"]*"\s+[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+            xml)
+
+        if not send_match:
+            # Fallback: try text attribute
+            send_match = re.search(
+                r'text="[^"]*(?:[Ee]nvoyer|[Ss]end)[^"]*"\s+[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+                xml)
+
+        if not send_match:
+            return {"ok": False, "error": "Bouton Envoyer non trouvé — SMS composé mais pas envoyé"}
+
+        x = (int(send_match.group(1)) + int(send_match.group(3))) // 2
+        y = (int(send_match.group(2)) + int(send_match.group(4))) // 2
+
+        # Step 3: Tap send
+        subprocess.run([
+            "adb", "-s", DEVICE_SERIAL, "shell", "input", "tap", str(x), str(y),
+        ], capture_output=True, timeout=5)
+
+        time.sleep(1)
+
+        # Step 4: Go home
+        subprocess.run([
+            "adb", "-s", DEVICE_SERIAL, "shell", "input", "keyevent", "KEYCODE_HOME",
+        ], capture_output=True, timeout=3)
+
+        return {"ok": True, "message": f"SMS envoyé à {to}"}
+
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def answer_call():
+    """Answer incoming call via ADB."""
+    try:
+        subprocess.run([
+            "adb", "-s", DEVICE_SERIAL, "shell", "input", "keyevent", "KEYCODE_CALL",
+        ], capture_output=True, timeout=3)
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def hangup_call():
+    """Hang up current call via ADB."""
+    try:
+        subprocess.run([
+            "adb", "-s", DEVICE_SERIAL, "shell", "input", "keyevent", "KEYCODE_ENDCALL",
+        ], capture_output=True, timeout=3)
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def is_device_connected():
     """Check if device is connected via ADB."""
     try:
@@ -1217,6 +1368,22 @@ def is_device_connected():
 
 class BackupHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
+
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length)) if length else {}
+
+        if path == "/api/sms/send":
+            result = send_sms(body.get("to", ""), body.get("body", ""))
+            self._json(result)
+        elif path == "/api/call/answer":
+            self._json(answer_call())
+        elif path == "/api/call/hangup":
+            self._json(hangup_call())
+        else:
+            self._respond(404, "text/plain", b"Not Found")
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
