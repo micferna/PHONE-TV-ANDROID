@@ -4,7 +4,11 @@
 import http.server
 import json
 import mimetypes
+import re
+import subprocess
 import urllib.parse
+from collections import Counter, defaultdict
+from datetime import datetime
 from pathlib import Path
 
 BACKUP_ROOT = Path.home() / "Backups" / "Phone"
@@ -147,6 +151,8 @@ tr:hover td { background:var(--surface2); }
     <button class="tab" data-t="calls">📞 Appels <span class="cnt" id="cnt-calls"></span></button>
     <button class="tab" data-t="files">📁 Fichiers</button>
     <button class="tab" data-t="apps">📦 Apps</button>
+    <button class="tab" data-t="osint">🔍 OSINT</button>
+    <button class="tab" data-t="live">⚡ Live</button>
     <button class="tab" data-t="logs">📋 Logs</button>
   </div>
 </nav>
@@ -205,6 +211,34 @@ tr:hover td { background:var(--surface2); }
   <div class="app-grid" id="apps-grid"></div>
 </div>
 
+<!-- ═══ OSINT ═══ -->
+<div class="sec" id="s-osint">
+  <div class="row" id="osint-stats"></div>
+  <input class="search" id="osint-search" placeholder="Rechercher un numéro, nom, opérateur...">
+  <div class="tw"><table><thead><tr>
+    <th>Contact</th><th>Numéro</th><th>Type</th><th>Opérateur</th><th>Région</th>
+    <th>SMS ↓/↑</th><th>Appels ↓/↑</th><th>Manqués</th><th>Durée</th><th>Actif</th><th>Pic</th>
+  </tr></thead><tbody id="osint-body"></tbody></table></div>
+  <div class="pag" id="osint-pag"></div>
+  <!-- Detail panel -->
+  <div id="osint-detail" style="display:none;margin-top:16px"></div>
+</div>
+
+<!-- ═══ Live ═══ -->
+<div class="sec" id="s-live">
+  <div class="row">
+    <div class="card"><div class="lbl">Status</div><div class="val" id="live-status" style="font-size:16px">...</div></div>
+    <div class="card"><div class="lbl">Dernier refresh</div><div class="val" id="live-time" style="font-size:16px">-</div></div>
+    <div class="card" style="display:flex;align-items:center;justify-content:center">
+      <button onclick="livePoll()" style="padding:10px 24px;border-radius:var(--r);background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:14px;font-weight:600">🔄 Rafraîchir</button>
+    </div>
+  </div>
+  <div class="row">
+    <div class="card" style="flex:1"><div class="lbl">💬 Derniers SMS (live)</div><div id="live-sms" style="margin-top:8px;max-height:400px;overflow-y:auto"></div></div>
+    <div class="card" style="flex:1"><div class="lbl">📞 Derniers appels (live)</div><div id="live-calls" style="margin-top:8px;max-height:400px;overflow-y:auto"></div></div>
+  </div>
+</div>
+
 <!-- ═══ Logs ═══ -->
 <div class="sec" id="s-logs">
   <div class="logbox" id="full-log"></div>
@@ -241,7 +275,7 @@ async function init(){
   renderOverview(); renderConversations(); renderContacts(); renderCalls(); renderFiles(''); renderApps(); renderLogs();
 }
 function f(u){return fetch(u).then(r=>r.json()).catch(()=>null);}
-function normNum(n){return(n||'').replace(/[\s\-\.()]/g,'');}
+function normNum(n){let x=(n||'').replace(/[\s\-\.()]/g,'');if(x.startsWith('0')&&x.length===10)x='+33'+x.slice(1);if(x.startsWith('0033'))x='+33'+x.slice(4);return x;}
 function resolveName(num){return contactMap[normNum(num)]||'';}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 function fmtDur(s){if(!s)return'-';const m=Math.floor(s/60),r=s%60;return m?m+'m'+(r?r+'s':''):r+'s';}
@@ -451,10 +485,507 @@ function renderPag(id,total,cur,fn){
   el.querySelectorAll('button').forEach(b=>b.onclick=()=>fn(parseInt(b.dataset.p)));
 }
 
+// ── OSINT ──
+let osintData=[];
+async function loadOsint(){
+  osintData=await f('/api/osint')||[];
+  renderOsint();
+}
+function renderOsint(filter=''){
+  let items=osintData;
+  if(filter){const q=filter.toLowerCase();items=items.filter(i=>(i.contact_name||'').toLowerCase().includes(q)||(i.normalized||'').includes(q)||(i.operator||'').toLowerCase().includes(q));}
+
+  // Stats
+  const operators={}; items.forEach(i=>{const o=i.operator||'Inconnu';operators[o]=(operators[o]||0)+1;});
+  const mobiles=items.filter(i=>i.type==='mobile').length;
+  const fixes=items.filter(i=>i.type==='fixe').length;
+  const voip=items.filter(i=>i.type==='voip').length;
+  const masked=items.filter(i=>i.type==='masked').length;
+  document.getElementById('osint-stats').innerHTML=[
+    `<div class="card"><div class="lbl">Numéros uniques</div><div class="val c-accent">${items.length}</div></div>`,
+    `<div class="card"><div class="lbl">Mobiles</div><div class="val c-green">${mobiles}</div></div>`,
+    `<div class="card"><div class="lbl">Fixes</div><div class="val c-cyan">${fixes}</div></div>`,
+    `<div class="card"><div class="lbl">VoIP</div><div class="val c-orange">${voip}</div></div>`,
+    `<div class="card"><div class="lbl">Masqués</div><div class="val c-red">${masked}</div></div>`,
+    `<div class="card"><div class="lbl">Opérateurs</div><div class="val" style="font-size:14px">${Object.entries(operators).sort((a,b)=>b[1]-a[1]).map(([o,c])=>`<span style="color:${OPCOL[o]||'var(--dim)'}">${o}</span> (${c})`).join(', ')}</div></div>`,
+  ].join('');
+
+  const start=S.osintPage*PS,page=items.slice(start,start+PS);
+  const typeIcons={mobile:'📱',fixe:'☎️',voip:'🌐',special:'⚠️',masked:'👻',international:'🌍',court:'📟'};
+  document.getElementById('osint-body').innerHTML=page.map((i,idx)=>{
+    const name=i.contact_name||'<span style="color:var(--dim)">Inconnu</span>';
+    const opStyle=i.operator_color?`color:${i.operator_color};font-weight:600`:'color:var(--dim)';
+    const risk=i.risk?`<br><span style="color:var(--red);font-size:11px">${esc(i.risk)}</span>`:'';
+    const peak=i.peak_hour>=0?i.peak_hour+'h':'-';
+    return `<tr style="cursor:pointer" onclick="showOsintDetail(${start+idx})">
+      <td>${name}</td>
+      <td style="font-family:monospace">${i.normalized||i.raw||'(masqué)'}${risk}</td>
+      <td>${typeIcons[i.type]||'?'} ${i.type||''}</td>
+      <td style="${opStyle}">${i.operator||'-'}</td>
+      <td>${i.geo||'-'}</td>
+      <td><span class="c-green">${i.sms_in}</span> / <span class="c-accent">${i.sms_out}</span></td>
+      <td><span class="c-green">${i.calls_in}</span> / <span class="c-accent">${i.calls_out}</span></td>
+      <td>${i.calls_missed?`<span class="c-red">${i.calls_missed}</span>`:'-'}</td>
+      <td>${fmtDur(i.total_duration)}</td>
+      <td style="font-size:11px">${(i.last_seen||'').slice(0,10)}</td>
+      <td>${peak}</td>
+    </tr>`;
+  }).join('');
+  renderPag('osint-pag',items.length,S.osintPage||0,p=>{S.osintPage=p;renderOsint(filter);});
+}
+S.osintPage=0;
+const OPCOL={"Orange":"#ff6600","SFR":"#e4002b","Bouygues":"#003da5","Free":"#cd1e25"};
+document.getElementById('osint-search').addEventListener('input',e=>{S.osintPage=0;renderOsint(e.target.value);});
+
+function showOsintDetail(idx){
+  const i=osintData[idx]; if(!i)return;
+  const el=document.getElementById('osint-detail');
+  el.style.display='block';
+  // Activity heatmap (24h)
+  let heatmap='';
+  for(let h=0;h<24;h++){
+    const cnt=i.hours[h]||0;
+    const max=Math.max(...Object.values(i.hours||{1:1}),1);
+    const opacity=cnt?Math.max(0.15,cnt/max):0.03;
+    heatmap+=`<div style="display:inline-block;width:28px;height:28px;margin:1px;border-radius:4px;background:rgba(124,138,255,${opacity});text-align:center;line-height:28px;font-size:10px;color:var(--dim)" title="${h}h: ${cnt} interactions">${h}</div>`;
+  }
+  const total=i.sms_in+i.sms_out+i.calls_in+i.calls_out+i.calls_missed;
+  el.innerHTML=`<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:start">
+      <div>
+        <h3>${esc(i.contact_name||i.normalized||'Inconnu')}</h3>
+        <div style="color:var(--dim);font-family:monospace;margin-top:4px">${i.normalized||'(masqué)'}</div>
+      </div>
+      <button onclick="document.getElementById('osint-detail').style.display='none'" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:18px">✕</button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <div class="card"><div class="lbl">Type</div><div>${i.line||i.type||'-'}</div></div>
+      <div class="card"><div class="lbl">Opérateur</div><div style="color:${i.operator_color||'var(--text)'};font-weight:600">${i.operator||'-'}</div></div>
+      <div class="card"><div class="lbl">Région</div><div>${i.geo||'-'}</div></div>
+      <div class="card"><div class="lbl">Pays</div><div>${i.country||'-'}</div></div>
+    </div>
+    <div class="row">
+      <div class="card"><div class="lbl">Total interactions</div><div class="val c-accent">${total}</div></div>
+      <div class="card"><div class="lbl">SMS</div><div>📥 ${i.sms_in} reçus / 📤 ${i.sms_out} envoyés</div></div>
+      <div class="card"><div class="lbl">Appels</div><div>📥 ${i.calls_in} / 📤 ${i.calls_out} / ❌ ${i.calls_missed}</div></div>
+      <div class="card"><div class="lbl">Durée totale</div><div>${fmtDur(i.total_duration)}</div></div>
+    </div>
+    <div class="row">
+      <div class="card"><div class="lbl">Première interaction</div><div>${i.first_seen||'-'}</div></div>
+      <div class="card"><div class="lbl">Dernière interaction</div><div>${i.last_seen||'-'}</div></div>
+      <div class="card"><div class="lbl">Heure de pic</div><div>${i.peak_hour>=0?i.peak_hour+'h':'-'}</div></div>
+    </div>
+    <div style="margin-top:12px"><div class="lbl" style="margin-bottom:8px">Activité par heure</div>${heatmap}</div>
+    ${i.risk?`<div style="margin-top:12px;padding:10px;background:var(--red-dim);border-radius:var(--r-sm);color:var(--red)">⚠️ ${esc(i.risk)}</div>`:''}
+  </div>`;
+  el.scrollIntoView({behavior:'smooth'});
+}
+
+// ── Live ──
+let liveInterval=null;
+let liveSmsEpoch=0, liveCallsEpoch=0;
+
+async function livePoll(){
+  const status=await f('/api/live/status');
+  const conn=status?.connected;
+  document.getElementById('live-status').innerHTML=conn?
+    '<span class="c-green">● Connecté</span>':'<span class="c-red">● Déconnecté</span>';
+  document.getElementById('live-time').textContent=new Date().toLocaleTimeString('fr-FR');
+
+  if(!conn)return;
+
+  const sms=await f('/api/live/sms?since=0')||[];
+  const calls=await f('/api/live/calls?since=0')||[];
+
+  // Render live SMS
+  document.getElementById('live-sms').innerHTML=sms.map(s=>{
+    const name=resolveName(s.address)||s.address;
+    const cls=s.type==='sent'?'b-sent':'b-recv';
+    const lbl=s.type==='sent'?'→':'←';
+    const osint=analyzeNumLocal(s.address);
+    return `<div style="padding:8px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:start">
+      <span class="badge ${cls}" style="min-width:20px;text-align:center">${lbl}</span>
+      <div style="flex:1">
+        <div style="display:flex;justify-content:space-between">
+          <b>${esc(name)}</b>
+          <span style="font-size:11px;color:var(--dim)">${s.date}</span>
+        </div>
+        <div style="font-size:13px;margin-top:2px">${esc(s.body||'')}</div>
+        <div style="font-size:10px;color:var(--dim);margin-top:2px">${osint}</div>
+      </div>
+    </div>`;
+  }).join('')||'<div style="color:var(--dim);padding:20px;text-align:center">Aucun SMS récent</div>';
+
+  // Render live calls
+  document.getElementById('live-calls').innerHTML=calls.map(c=>{
+    const name=c.name||resolveName(c.number)||c.number||'(masqué)';
+    const badgeCls={incoming:'b-recv',outgoing:'b-sent',missed:'b-miss'}[c.type]||'';
+    const typeLabel={incoming:'📥 Entrant',outgoing:'📤 Sortant',missed:'❌ Manqué'}[c.type]||c.type;
+    const osint=analyzeNumLocal(c.number);
+    return `<div style="padding:8px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><b>${esc(name)}</b> <span style="font-family:monospace;font-size:12px;color:var(--dim)">${c.number||''}</span></div>
+        <span class="badge ${badgeCls}">${typeLabel}</span>
+      </div>
+      <div style="font-size:12px;color:var(--dim);margin-top:2px">${c.date} — ${fmtDur(c.duration_sec)}</div>
+      <div style="font-size:10px;color:var(--dim);margin-top:2px">${osint}</div>
+    </div>`;
+  }).join('')||'<div style="color:var(--dim);padding:20px;text-align:center">Aucun appel récent</div>';
+}
+
+// Local OSINT mini-analysis for display
+function analyzeNumLocal(num){
+  if(!num)return'Numéro masqué';
+  const n=num.replace(/[\s\-\.()]/g,'');
+  let norm=n;
+  if(n.startsWith('0')&&n.length===10)norm='+33'+n.slice(1);
+  if(!norm.startsWith('+33'))return norm.startsWith('+')?'International':'';
+  const d=norm.slice(3);
+  if(d[0]==='6'||d[0]==='7')return'📱 Mobile FR';
+  if('12345'.includes(d[0]))return'☎️ Fixe FR';
+  if(d[0]==='8')return'⚠️ Numéro spécial';
+  if(d[0]==='9')return'🌐 VoIP';
+  return'';
+}
+
+// Start live polling when Live tab is active
+document.querySelectorAll('.tab').forEach(t=>{
+  const orig=t.onclick;
+  t.onclick=function(){
+    if(orig)orig.call(this);
+    if(t.dataset.t==='live'){
+      livePoll();
+      if(!liveInterval)liveInterval=setInterval(livePoll,5000);
+    } else {
+      if(liveInterval){clearInterval(liveInterval);liveInterval=null;}
+    }
+    if(t.dataset.t==='osint'&&!osintData.length)loadOsint();
+  };
+});
+
 init();
 </script>
 </body>
 </html>"""
+
+
+# ── OSINT: French phone number analysis ─────────────────────────────
+DEVICE_SERIAL = "ZY22JVMJWL"
+
+# French mobile operator ranges (prefix after +33 or 0)
+# Source: ARCEP numbering plan
+MOBILE_OPERATORS = {
+    "600": "Orange", "601": "Orange", "602": "Orange", "603": "Orange",
+    "604": "Orange", "605": "Orange", "606": "Orange", "607": "Orange",
+    "608": "Orange", "609": "Orange",
+    "610": "SFR", "611": "SFR", "612": "SFR", "613": "SFR",
+    "614": "SFR", "615": "SFR", "616": "SFR", "617": "SFR",
+    "618": "Free", "619": "Free",
+    "620": "SFR", "621": "SFR", "622": "Bouygues", "623": "Bouygues",
+    "624": "Bouygues", "625": "Bouygues", "626": "Bouygues", "627": "Bouygues",
+    "628": "Free", "629": "Free",
+    "630": "Orange", "631": "Orange", "632": "Orange", "633": "Orange",
+    "634": "Free", "635": "Free", "636": "Free", "637": "Free",
+    "638": "SFR", "639": "SFR",
+    "640": "SFR", "641": "SFR", "642": "SFR", "643": "SFR",
+    "644": "Bouygues", "645": "Bouygues", "646": "Bouygues", "647": "Bouygues",
+    "648": "Bouygues", "649": "Bouygues",
+    "650": "Orange", "651": "Orange", "652": "Orange", "653": "Orange",
+    "654": "Orange", "655": "Free", "656": "Free", "657": "Free",
+    "658": "SFR", "659": "SFR",
+    "660": "Orange", "661": "SFR", "662": "SFR", "663": "SFR",
+    "664": "SFR", "665": "Bouygues", "666": "Bouygues", "667": "Bouygues",
+    "668": "Orange", "669": "Orange",
+    "670": "Orange", "671": "Orange", "672": "Orange", "673": "Bouygues",
+    "674": "Free", "675": "Free", "676": "SFR", "677": "SFR",
+    "678": "Orange", "679": "Orange",
+    "680": "Orange", "681": "Orange", "682": "Orange", "683": "Free",
+    "684": "Free", "685": "Free", "686": "Orange", "687": "Orange",
+    "688": "Orange", "689": "Orange",
+    "690": "Orange", "691": "Orange", "692": "Orange", "693": "Orange",
+    "694": "Orange", "695": "Orange", "696": "Orange", "697": "Orange",
+    "698": "Orange", "699": "Orange",
+    "700": "Bouygues", "701": "Bouygues", "702": "Free",
+    "706": "SFR", "707": "SFR",
+    "740": "Orange", "741": "Orange", "742": "Free", "743": "Free",
+    "744": "SFR", "745": "SFR", "746": "Bouygues", "747": "Bouygues",
+    "748": "Bouygues", "749": "SFR", "750": "Free",
+    "751": "Free", "752": "Free", "753": "Free",
+    "756": "Orange", "757": "Orange", "758": "SFR",
+    "760": "Orange", "761": "Orange", "762": "Orange", "763": "SFR",
+    "764": "SFR", "765": "Bouygues", "766": "Bouygues",
+    "770": "Free", "771": "Free", "772": "Free", "773": "Free",
+    "774": "SFR", "775": "SFR", "776": "SFR", "777": "SFR",
+    "778": "Bouygues", "779": "Bouygues",
+    "780": "Orange", "781": "Orange", "782": "Orange", "783": "Orange",
+    "784": "SFR", "785": "SFR", "786": "Orange", "787": "Orange",
+    "788": "Bouygues", "789": "SFR",
+}
+
+# French geographic zones (fixed lines)
+GEO_ZONES = {
+    "1": "Île-de-France", "2": "Nord-Ouest", "3": "Nord-Est",
+    "4": "Sud-Est", "5": "Sud-Ouest",
+}
+
+OPERATOR_COLORS = {
+    "Orange": "#ff6600", "SFR": "#e4002b", "Bouygues": "#003da5",
+    "Free": "#cd1e25",
+}
+
+
+def normalize_number(num):
+    """Normalize French phone number to +33XXXXXXXXX format."""
+    n = re.sub(r'[\s\-\.()]', '', (num or '').strip())
+    if n.startswith('+33'):
+        return n
+    if n.startswith('0033'):
+        return '+33' + n[4:]
+    if n.startswith('0') and len(n) == 10:
+        return '+33' + n[1:]
+    return n
+
+
+def analyze_number(num):
+    """OSINT analysis of a French phone number."""
+    norm = normalize_number(num)
+    info = {"raw": num, "normalized": norm, "country": "", "type": "", "operator": "",
+            "operator_color": "", "geo": "", "line": "", "risk": ""}
+
+    if not norm.startswith('+33'):
+        if norm.startswith('+'):
+            info["country"] = "International"
+            info["type"] = "international"
+        elif not norm:
+            info["type"] = "masked"
+            info["risk"] = "Numéro masqué"
+        return info
+
+    info["country"] = "France (+33)"
+    digits = norm[3:]  # after +33
+
+    if len(digits) < 9:
+        info["type"] = "court"
+        return info
+
+    first = digits[0]
+    prefix3 = digits[:3]
+
+    if first in ('6', '7'):
+        info["type"] = "mobile"
+        info["line"] = "Mobile"
+        op = MOBILE_OPERATORS.get(prefix3, "")
+        if not op:
+            # Try broader match
+            for pfx_len in (3, 2):
+                test = digits[:pfx_len]
+                for k, v in MOBILE_OPERATORS.items():
+                    if k.startswith(test):
+                        op = v
+                        break
+                if op:
+                    break
+        info["operator"] = op or "Inconnu"
+        info["operator_color"] = OPERATOR_COLORS.get(op, "#888")
+    elif first in ('1', '2', '3', '4', '5'):
+        info["type"] = "fixe"
+        info["line"] = "Fixe"
+        info["geo"] = GEO_ZONES.get(first, "")
+        info["operator"] = "Fixe régional"
+    elif first == '8':
+        info["type"] = "special"
+        info["line"] = "Numéro spécial"
+        if digits[1] == '0':
+            info["operator"] = "Gratuit (numéro vert)"
+        elif digits[1] == '1' or digits[1] == '2':
+            info["operator"] = "Surtaxé"
+            info["risk"] = "Numéro surtaxé — attention aux frais"
+        elif digits[1] == '9':
+            info["operator"] = "Non surtaxé"
+    elif first == '9':
+        info["type"] = "voip"
+        info["line"] = "VoIP / Box internet"
+        info["operator"] = "FAI (box)"
+
+    return info
+
+
+def build_osint_report(sms_data, calls_data, contacts_data):
+    """Build full OSINT report for all numbers."""
+    contact_map = {}
+    for c in contacts_data:
+        if c.get("number"):
+            contact_map[normalize_number(c["number"])] = c.get("display_name", "")
+
+    # Aggregate all numbers
+    numbers = defaultdict(lambda: {"sms_in": 0, "sms_out": 0, "calls_in": 0, "calls_out": 0,
+                                    "calls_missed": 0, "total_duration": 0, "first_seen": "",
+                                    "last_seen": "", "hours": Counter()})
+
+    for s in sms_data:
+        n = normalize_number(s.get("address", ""))
+        if not n:
+            continue
+        if s["type"] == "received":
+            numbers[n]["sms_in"] += 1
+        else:
+            numbers[n]["sms_out"] += 1
+        d = s.get("date", "")
+        if d:
+            if not numbers[n]["first_seen"] or d < numbers[n]["first_seen"]:
+                numbers[n]["first_seen"] = d
+            if not numbers[n]["last_seen"] or d > numbers[n]["last_seen"]:
+                numbers[n]["last_seen"] = d
+            try:
+                h = int(d[11:13])
+                numbers[n]["hours"][h] += 1
+            except (ValueError, IndexError):
+                pass
+
+    for c in calls_data:
+        n = normalize_number(c.get("number", ""))
+        if not n:
+            continue
+        t = c.get("type", "")
+        if t == "incoming":
+            numbers[n]["calls_in"] += 1
+        elif t == "outgoing":
+            numbers[n]["calls_out"] += 1
+        elif t == "missed":
+            numbers[n]["calls_missed"] += 1
+        numbers[n]["total_duration"] += c.get("duration_sec", 0)
+        d = c.get("date", "")
+        if d:
+            if not numbers[n]["first_seen"] or d < numbers[n]["first_seen"]:
+                numbers[n]["first_seen"] = d
+            if not numbers[n]["last_seen"] or d > numbers[n]["last_seen"]:
+                numbers[n]["last_seen"] = d
+            try:
+                h = int(d[11:13])
+                numbers[n]["hours"][h] += 1
+            except (ValueError, IndexError):
+                pass
+
+    report = []
+    for num, stats in numbers.items():
+        analysis = analyze_number(num)
+        total_interactions = stats["sms_in"] + stats["sms_out"] + stats["calls_in"] + stats["calls_out"] + stats["calls_missed"]
+        # Peak hours
+        peak_hour = stats["hours"].most_common(1)[0][0] if stats["hours"] else -1
+        report.append({
+            **analysis,
+            "contact_name": contact_map.get(num, ""),
+            "sms_in": stats["sms_in"], "sms_out": stats["sms_out"],
+            "calls_in": stats["calls_in"], "calls_out": stats["calls_out"],
+            "calls_missed": stats["calls_missed"],
+            "total_interactions": total_interactions,
+            "total_duration": stats["total_duration"],
+            "first_seen": stats["first_seen"], "last_seen": stats["last_seen"],
+            "peak_hour": peak_hour,
+            "hours": dict(stats["hours"]),
+        })
+
+    report.sort(key=lambda x: x["total_interactions"], reverse=True)
+    return report
+
+
+# ── Live monitoring via ADB ─────────────────────────────────────────
+def adb_query(uri, projection=None):
+    """Query ADB content provider and return parsed rows."""
+    cmd = ["adb", "-s", DEVICE_SERIAL, "shell", "content", "query", "--uri", uri]
+    if projection:
+        cmd += ["--projection", projection]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        return r.stdout
+    except Exception:
+        return ""
+
+
+def get_live_sms(since_epoch_ms=0):
+    """Get recent SMS from device (live)."""
+    raw = adb_query("content://sms", "_id:address:body:date:type:read")
+    msgs = []
+    for line in raw.splitlines():
+        if not line.startswith("Row:"):
+            continue
+        m = {}
+        for key in ("_id", "date", "type", "read"):
+            match = re.search(key + r'=(\d+)', line)
+            if match:
+                m[key] = match.group(1)
+        match = re.search(r'address=([^,]+)', line)
+        if match:
+            m["address"] = match.group(1).strip()
+        match = re.search(r'body=(.*?)(?:, date=|, type=|, read=)', line)
+        if match:
+            m["body"] = match.group(1).strip()
+        else:
+            m["body"] = ""
+
+        date_ms = int(m.get("date", 0))
+        if since_epoch_ms and date_ms <= since_epoch_ms:
+            continue
+        try:
+            date_str = datetime.fromtimestamp(date_ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            date_str = str(date_ms)
+
+        type_map = {"1": "received", "2": "sent", "3": "draft", "4": "outbox"}
+        msgs.append({
+            "id": m.get("_id", ""), "date": date_str, "date_epoch_ms": date_ms,
+            "address": m.get("address", ""), "body": m.get("body", ""),
+            "type": type_map.get(m.get("type", ""), "unknown"), "read": int(m.get("read", 0)),
+        })
+    return msgs[:50]  # last 50
+
+
+def get_live_calls(since_epoch_ms=0):
+    """Get recent calls from device (live)."""
+    raw = adb_query("content://call_log/calls", "number:name:date:duration:type")
+    calls = []
+    for line in raw.splitlines():
+        if not line.startswith("Row:"):
+            continue
+        m = {}
+        for key in ("date", "duration", "type"):
+            match = re.search(key + r'=(\d+)', line)
+            if match:
+                m[key] = match.group(1)
+        match = re.search(r'number=([^,]+)', line)
+        if match:
+            m["number"] = match.group(1).strip()
+        match = re.search(r'name=([^,]+)', line)
+        if match:
+            n = match.group(1).strip()
+            m["name"] = "" if n == "NULL" else n
+
+        date_ms = int(m.get("date", 0))
+        if since_epoch_ms and date_ms <= since_epoch_ms:
+            continue
+        try:
+            date_str = datetime.fromtimestamp(date_ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            date_str = str(date_ms)
+
+        type_map = {"1": "incoming", "2": "outgoing", "3": "missed", "4": "voicemail", "5": "rejected"}
+        calls.append({
+            "date": date_str, "date_epoch_ms": date_ms,
+            "number": m.get("number", ""), "name": m.get("name", ""),
+            "duration_sec": int(m.get("duration", 0)),
+            "type": type_map.get(m.get("type", ""), "unknown"),
+        })
+    return calls[:30]
+
+
+def is_device_connected():
+    """Check if device is connected via ADB."""
+    try:
+        r = subprocess.run(["adb", "-s", DEVICE_SERIAL, "get-state"],
+                           capture_output=True, text=True, timeout=3)
+        return "device" in r.stdout
+    except Exception:
+        return False
 
 
 class BackupHandler(http.server.BaseHTTPRequestHandler):
@@ -476,6 +1007,10 @@ class BackupHandler(http.server.BaseHTTPRequestHandler):
             "/api/log": lambda: self._text(self._read_log()),
             "/api/stats": lambda: self._json(self._get_stats()),
             "/api/files": lambda: self._json(self._list_files(query.get("path", [""])[0])),
+            "/api/osint": lambda: self._json(self._get_osint()),
+            "/api/live/status": lambda: self._json({"connected": is_device_connected()}),
+            "/api/live/sms": lambda: self._json(get_live_sms(int(query.get("since", [0])[0]))),
+            "/api/live/calls": lambda: self._json(get_live_calls(int(query.get("since", [0])[0]))),
         }
 
         if path in routes:
@@ -510,6 +1045,12 @@ class BackupHandler(http.server.BaseHTTPRequestHandler):
         except PermissionError:
             pass
         return {"items": items}
+
+    def _get_osint(self):
+        sms = self._load_export("sms")
+        calls = self._load_export("call_log")
+        contacts = self._load_export("contacts")
+        return build_osint_report(sms, calls, contacts)
 
     def _read_log(self):
         f = BACKUP_ROOT / "backup.log"
