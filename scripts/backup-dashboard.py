@@ -204,15 +204,15 @@ tr:hover td { background:var(--surface2); }
 
 <!-- ═══ Contacts ═══ -->
 <div class="sec" id="s-contacts">
-  <input class="search" id="contacts-search" placeholder="Rechercher un contact...">
-  <div class="tw"><table><thead><tr><th>Nom</th><th>Numéro</th><th>Type</th><th>SMS</th><th>Appels</th></tr></thead><tbody id="contacts-body"></tbody></table></div>
+  <input class="search" id="contacts-search" placeholder="Rechercher un contact (nom, numéro, opérateur...)">
+  <div class="tw"><table><thead><tr><th>Nom</th><th>Numéro</th><th>Opérateur</th><th>Type</th><th>SMS</th><th>Appels</th><th>Actions</th></tr></thead><tbody id="contacts-body"></tbody></table></div>
 </div>
 
 <!-- ═══ Calls ═══ -->
 <div class="sec" id="s-calls">
   <div class="row" id="call-stats"></div>
-  <input class="search" id="calls-search" placeholder="Rechercher un appel...">
-  <div class="tw"><table><thead><tr><th>Date</th><th>Nom</th><th>Numéro</th><th>Durée</th><th>Type</th></tr></thead><tbody id="calls-body"></tbody></table></div>
+  <input class="search" id="calls-search" placeholder="Rechercher un appel (nom, numéro, opérateur...)">
+  <div class="tw"><table><thead><tr><th>Date</th><th>Contact</th><th>Numéro</th><th>Opérateur</th><th>Type ligne</th><th>Durée</th><th>Sens</th><th>Actions</th></tr></thead><tbody id="calls-body"></tbody></table></div>
   <div class="pag" id="calls-pag"></div>
 </div>
 
@@ -349,7 +349,10 @@ async function init(){
 
   document.getElementById('cnt-sms').textContent=D.sms.length;
   document.getElementById('cnt-calls').textContent=D.calls.length;
-  renderOverview(); renderConversations(); renderContacts(); renderCalls(); renderFiles(''); renderApps(); renderLogs();
+  renderOverview(); renderConversations(); renderContacts(); renderFiles(''); renderApps(); renderLogs();
+  // Load OSINT data first, then render calls (needs operator info)
+  await loadOsint();
+  renderCalls();
   // Start SMS + calls live refresh every 5s
   setInterval(refreshSmsLive,5000);
   setInterval(refreshCallsLive,5000);
@@ -562,7 +565,22 @@ function renderContacts(filter=''){
   const callCounts={};D.calls.forEach(c=>{const k=normNum(c.number);callCounts[k]=(callCounts[k]||0)+1;});
   document.getElementById('contacts-body').innerHTML=items.map(c=>{
     const n=normNum(c.number);
-    return `<tr><td>${esc(c.display_name||'')}</td><td style="font-family:monospace">${c.number||''}</td><td><span class="badge">${c.type||''}</span></td><td>${smsCounts[n]||0}</td><td>${callCounts[n]||0}</td></tr>`;
+    const oi=osintLookup(c.number);
+    const opStyle=oi.operator_color?`color:${oi.operator_color};font-weight:600`:'color:var(--dim)';
+    const lineIcon={mobile:'📱',fixe:'☎️',voip:'🌐',special:'⚠️'}[oi.type]||'';
+    return `<tr>
+      <td><b>${esc(c.display_name||'')}</b></td>
+      <td><a href="#" onclick="event.preventDefault();showNumActions('${n}')" style="font-family:monospace;color:var(--accent);text-decoration:none">${c.number||''}</a></td>
+      <td style="${opStyle}">${oi.operator||'-'}</td>
+      <td>${lineIcon} ${oi.type||c.type||'-'} ${oi.geo?'<span style="color:var(--dim);font-size:11px">('+oi.geo+')</span>':''}</td>
+      <td>${smsCounts[n]||0}</td>
+      <td>${callCounts[n]||0}</td>
+      <td style="white-space:nowrap">
+        <a href="#" onclick="event.preventDefault();makeQuickCall('${c.number}')" title="Appeler" style="text-decoration:none">📞</a>
+        <a href="#" onclick="event.preventDefault();openConvForNum('${n}')" title="SMS" style="text-decoration:none;margin-left:6px">💬</a>
+        <a href="#" onclick="event.preventDefault();showNumOsint('${n}')" title="OSINT" style="text-decoration:none;margin-left:6px">🔍</a>
+      </td>
+    </tr>`;
   }).join('');
 }
 document.getElementById('contacts-search').addEventListener('input',e=>renderContacts(e.target.value));
@@ -581,14 +599,37 @@ function renderCalls(filter=''){
   ].join('');
 
   let items=D.calls;
-  if(filter){const q=filter.toLowerCase();items=items.filter(c=>(c.name||'').toLowerCase().includes(q)||(c.number||'').toLowerCase().includes(q));}
+  if(filter){const q=filter.toLowerCase();items=items.filter(c=>{
+    const oi=osintLookup(c.number);
+    return (c.name||'').toLowerCase().includes(q)||(c.number||'').toLowerCase().includes(q)||
+      (oi.operator||'').toLowerCase().includes(q)||(oi.type||'').toLowerCase().includes(q)||
+      (resolveName(c.number)||'').toLowerCase().includes(q);
+  });}
   const start=S.callsPage*PS,page=items.slice(start,start+PS);
   const badgeCls={incoming:'b-recv',outgoing:'b-sent',missed:'b-miss'};
-  const typeLabel={incoming:'Entrant',outgoing:'Sortant',missed:'Manqué',voicemail:'Messagerie',rejected:'Rejeté',blocked:'Bloqué'};
-  document.getElementById('calls-body').innerHTML=page.map(c=>`<tr>
-    <td>${dateFRShort(c.date)}</td><td>${esc(c.name||resolveName(c.number)||'-')}</td><td style="font-family:monospace">${c.number||''}</td>
-    <td>${fmtDur(c.duration_sec)}</td><td><span class="badge ${badgeCls[c.type]||''}">${typeLabel[c.type]||c.type}</span></td>
-  </tr>`).join('');
+  const typeLabel={incoming:'📥 Entrant',outgoing:'📤 Sortant',missed:'❌ Manqué',voicemail:'📩 Messagerie',rejected:'🚫 Rejeté',blocked:'🔒 Bloqué'};
+  const lineIcons={mobile:'📱',fixe:'☎️',voip:'🌐',special:'⚠️',masked:'👻'};
+  document.getElementById('calls-body').innerHTML=page.map(c=>{
+    const oi=osintLookup(c.number);
+    const name=c.name||resolveName(c.number)||oi.contact||'';
+    const opStyle=oi.operator_color?`color:${oi.operator_color};font-weight:600`:'color:var(--dim)';
+    const num=c.number||'';
+    const normN=normNum(num);
+    return `<tr>
+      <td>${dateFRShort(c.date)}</td>
+      <td><b>${esc(name||'-')}</b></td>
+      <td><a href="#" onclick="event.preventDefault();showNumActions('${normN}')" style="font-family:monospace;color:var(--accent);text-decoration:none">${num||'(masqué)'}</a></td>
+      <td style="${opStyle}">${oi.operator||'-'}</td>
+      <td>${lineIcons[oi.type]||''} ${oi.type||'-'} ${oi.geo?'<span style="color:var(--dim);font-size:11px">('+oi.geo+')</span>':''}</td>
+      <td>${fmtDur(c.duration_sec)}</td>
+      <td><span class="badge ${badgeCls[c.type]||''}">${typeLabel[c.type]||c.type}</span></td>
+      <td style="white-space:nowrap">
+        ${num?`<a href="#" onclick="event.preventDefault();makeQuickCall('${num}')" title="Appeler" style="text-decoration:none">📞</a>
+        <a href="#" onclick="event.preventDefault();openConvForNum('${normN}')" title="Voir SMS" style="text-decoration:none;margin-left:6px">💬</a>
+        <a href="#" onclick="event.preventDefault();showNumOsint('${normN}')" title="OSINT" style="text-decoration:none;margin-left:6px">🔍</a>`:''}
+      </td>
+    </tr>`;
+  }).join('');
   renderPag('calls-pag',items.length,S.callsPage,p=>{S.callsPage=p;renderCalls(filter);});
 }
 document.getElementById('calls-search').addEventListener('input',e=>{S.callsPage=0;renderCalls(e.target.value);});
@@ -926,13 +967,17 @@ async function pollLocation(){
   locMarkers.forEach(m=>locMap.removeLayer(m));
   locMarkers=[];
 
-  if(geo&&geo.lat&&geo.lng){
+  if(geo&&geo.lat&&geo.lng&&geo.source==='cell'){
+    // Only show real cell-tower resolved positions, not IP-based guesses
     const marker=L.circleMarker([geo.lat,geo.lng],{
       radius:12,color:'#7c8aff',fillColor:'#7c8aff',fillOpacity:0.9,weight:3
     }).addTo(locMap);
-    marker.bindPopup(`<b style="color:#000">📍 Position actuelle</b><br>📡 ${cur?'Antenne '+cur.cid:''}<br>🎯 ~${Math.round(geo.accuracy||0)}m (${geo.source||'?'})`);
+    marker.bindPopup(`<b style="color:#000">📍 Position actuelle</b><br>📡 Antenne ${cur?cur.cid:'-'}<br>🎯 ~${Math.round(geo.accuracy||0)}m`);
     locMarkers.push(marker);
     if(!locMapCentered){locMap.setView([geo.lat,geo.lng],14);locMapCentered=true;}
+  } else if(!locMapCentered){
+    // Default: center on France
+    locMap.setView([46.6,2.5],6);
   }
 
   // Load full location history and display all points
@@ -1019,6 +1064,64 @@ async function loadLocationHistory(){
 
 // Extract locations on first load of Bornage tab
 let locExtracted=false;
+
+// ── Cross-tab actions (click on number → action) ──
+function showNumActions(num){
+  // Show a small popup with actions for this number
+  const oi=osintLookup(num);
+  const name=resolveName(num)||oi.contact||num;
+  const existing=document.getElementById('num-popup');
+  if(existing)existing.remove();
+  const div=document.createElement('div');
+  div.id='num-popup';
+  div.style.cssText='position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:20px;z-index:300;min-width:320px;box-shadow:0 20px 60px rgba(0,0,0,.5)';
+  div.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h3>${esc(name)}</h3>
+      <button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:18px">✕</button>
+    </div>
+    <div style="font-family:monospace;color:var(--dim);margin-bottom:12px">${num}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+      ${oi.type?`<span class="dbadge" style="background:var(--surface2)">${{mobile:'📱 Mobile',fixe:'☎️ Fixe',voip:'🌐 VoIP',special:'⚠️ Spécial'}[oi.type]||oi.type}</span>`:''}
+      ${oi.operator?`<span class="dbadge" style="background:var(--surface2);color:${oi.operator_color||'var(--dim)'}">${oi.operator}</span>`:''}
+      ${oi.geo?`<span class="dbadge" style="background:var(--surface2)">📍 ${oi.geo}</span>`:''}
+    </div>
+    ${oi.total?`<div style="color:var(--dim);font-size:12px;margin-bottom:12px">💬 ${oi.sms} SMS / 📞 ${oi.calls} appels</div>`:''}
+    <div style="display:flex;gap:8px">
+      <button onclick="this.parentElement.parentElement.remove();makeQuickCall('${num}')" style="flex:1;padding:10px;border-radius:var(--r);background:var(--green);color:#000;border:none;cursor:pointer;font-weight:600">📞 Appeler</button>
+      <button onclick="this.parentElement.parentElement.remove();openConvForNum('${normNum(num)}')" style="flex:1;padding:10px;border-radius:var(--r);background:var(--accent);color:#fff;border:none;cursor:pointer;font-weight:600">💬 SMS</button>
+      <button onclick="this.parentElement.parentElement.remove();showNumOsint('${normNum(num)}')" style="flex:1;padding:10px;border-radius:var(--r);background:var(--surface2);color:var(--text);border:1px solid var(--border);cursor:pointer;font-weight:600">🔍 OSINT</button>
+    </div>
+  `;
+  document.body.appendChild(div);
+}
+
+async function makeQuickCall(num){
+  const r=await fetch('/api/call/make',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({number:num})}).then(r=>r.json()).catch(()=>({ok:false}));
+  if(!r.ok)alert('Erreur: '+(r.error||''));
+}
+
+function openConvForNum(normN){
+  // Switch to SMS tab and open conversation
+  document.querySelectorAll('.tab').forEach(t=>{t.classList.remove('on');if(t.dataset.t==='sms')t.classList.add('on');});
+  document.querySelectorAll('.sec').forEach(s=>{s.classList.remove('on');});
+  document.getElementById('s-sms').classList.add('on');
+  openConversation(normN);
+}
+
+function showNumOsint(normN){
+  // Switch to OSINT tab and show detail
+  document.querySelectorAll('.tab').forEach(t=>{t.classList.remove('on');if(t.dataset.t==='osint')t.classList.add('on');});
+  document.querySelectorAll('.sec').forEach(s=>{s.classList.remove('on');});
+  document.getElementById('s-osint').classList.add('on');
+  if(!osintData.length){loadOsint().then(()=>{
+    const idx=osintData.findIndex(o=>o.normalized===normN);
+    if(idx>=0)showOsintDetail(idx);
+  });}else{
+    const idx=osintData.findIndex(o=>o.normalized===normN);
+    if(idx>=0)showOsintDetail(idx);
+  }
+}
 
 // ── Live ──
 let liveInterval=null;
@@ -1589,10 +1692,8 @@ def _load_cell_cache():
 def _save_cell_cache():
     CELL_CACHE.write_text(json.dumps(_cell_geo_cache, indent=1))
 
-_ip_geo_cache = None
-
 def geolocate_cell(mcc, mnc, tac, cid):
-    """Resolve a single cell tower to GPS coordinates. Uses cache + IP fallback."""
+    """Resolve a single cell tower to GPS coordinates. Uses cache."""
     if not cid or cid >= 2147483647:
         return None
 
@@ -1600,21 +1701,20 @@ def geolocate_cell(mcc, mnc, tac, cid):
     if key in _cell_geo_cache:
         return _cell_geo_cache[key]
 
-    # For now, use IP geolocation as approximation for all cells
-    # (free cell tower APIs require registration)
-    # This gives city-level accuracy which is enough for an overview
-    ip = geolocate_ip()
-    if ip:
-        # Add small random offset per eNodeB to differentiate cells on map
-        import hashlib
-        h = hashlib.md5(str(cid).encode()).hexdigest()
-        offset_lat = (int(h[:4], 16) - 32768) / 3276800  # ~±0.01 degrees
-        offset_lng = (int(h[4:8], 16) - 32768) / 3276800
-        result = {"lat": ip["lat"] + offset_lat, "lng": ip["lng"] + offset_lng}
-        _cell_geo_cache[key] = result
-        _save_cell_cache()
-        return result
-
+    # Only return real data from APIs, never fake IP-based positions
+    import urllib.request
+    try:
+        url = f"https://opencellid.org/ajax/searchCell.php?mcc={mcc}&mnc={mnc}&lac={tac}&cell_id={cid}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=5)
+        data = json.loads(resp.read())
+        if isinstance(data, dict) and data.get("lat") and data.get("lon"):
+            result = {"lat": float(data["lat"]), "lng": float(data["lon"])}
+            _cell_geo_cache[key] = result
+            _save_cell_cache()
+            return result
+    except Exception:
+        pass
     return None
 
 
@@ -1792,7 +1892,7 @@ def get_live_location():
     except Exception:
         pass
 
-    # Current position: try cell tower first, fallback to IP
+    # Current position: try cell tower geolocation (only real data)
     geo = None
     cur = cell_data.get("current")
     if cur:
@@ -1800,20 +1900,20 @@ def get_live_location():
         if geo:
             geo["accuracy"] = 500
             geo["source"] = "cell"
-    if not geo:
-        geo = geolocate_ip()
-        if geo:
-            geo["source"] = "ip"
 
-    # Log current position
+    # Log current cell (with or without GPS — the cell info itself is valuable)
     if cur:
         append_location({
             "lat": geo["lat"] if geo else None,
             "lng": geo["lng"] if geo else None,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "source": "live_cell",
-            "label": f"Antenne {cur.get('cid', '')}",
+            "label": f"Antenne {cur.get('cid', '')} (eNB {cur.get('enb', '')})",
             "cid": cur.get("cid"),
+            "enb": cur.get("enb"),
+            "pci": cur.get("pci"),
+            "tac": cur.get("tac"),
+            "operator": cur.get("operator"),
         })
 
     return {
