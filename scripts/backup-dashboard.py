@@ -322,6 +322,49 @@ async function init(){
   document.getElementById('cnt-sms').textContent=D.sms.length;
   document.getElementById('cnt-calls').textContent=D.calls.length;
   renderOverview(); renderConversations(); renderContacts(); renderCalls(); renderFiles(''); renderApps(); renderLogs();
+  // Start SMS + calls live refresh every 5s
+  setInterval(refreshSmsLive,5000);
+  setInterval(refreshCallsLive,5000);
+}
+
+// ── SMS Live Refresh ──
+async function refreshSmsLive(){
+  const live=await f('/api/live/sms?since=0');
+  if(!live||!live.length)return;
+  // Merge live SMS into D.sms (deduplicate by date_epoch_ms)
+  const existing=new Set(D.sms.map(s=>s.date_epoch_ms));
+  let added=0;
+  for(const s of live){
+    if(!existing.has(s.date_epoch_ms)){
+      D.sms.unshift(s);
+      existing.add(s.date_epoch_ms);
+      added++;
+    }
+  }
+  if(added>0){
+    document.getElementById('cnt-sms').textContent=D.sms.length;
+    renderConversations(document.getElementById('sms-search').value);
+    // If a conversation is open, refresh it
+    if(S.convActive) openConversation(S.convActive);
+  }
+}
+
+async function refreshCallsLive(){
+  const live=await f('/api/live/calls?since=0');
+  if(!live||!live.length)return;
+  const existing=new Set(D.calls.map(c=>c.date_epoch_ms));
+  let added=0;
+  for(const c of live){
+    if(!existing.has(c.date_epoch_ms)){
+      D.calls.unshift(c);
+      existing.add(c.date_epoch_ms);
+      added++;
+    }
+  }
+  if(added>0){
+    document.getElementById('cnt-calls').textContent=D.calls.length;
+    renderCalls(document.getElementById('calls-search').value);
+  }
 }
 function f(u){return fetch(u).then(r=>r.json()).catch(()=>null);}
 function normNum(n){let x=(n||'').replace(/[\s\-\.()]/g,'');if(x.startsWith('0')&&x.length===10)x='+33'+x.slice(1);if(x.startsWith('0033'))x='+33'+x.slice(4);return x;}
