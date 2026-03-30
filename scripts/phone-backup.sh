@@ -39,9 +39,14 @@ acquire_lock() {
     if [ -f "$LOCK_FILE" ]; then
         local lock_pid
         lock_pid=$(cat "$LOCK_FILE" 2>/dev/null || echo "")
+        # Check if PID is alive AND is actually our backup script
         if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
-            log "SKIP: backup already running (PID $lock_pid)"
-            exit 0
+            local cmdline
+            cmdline=$(cat "/proc/$lock_pid/cmdline" 2>/dev/null | tr '\0' ' ' || echo "")
+            if [[ "$cmdline" == *"phone-backup"* ]]; then
+                log "SKIP: backup already running (PID $lock_pid)"
+                exit 0
+            fi
         fi
         rm -f "$LOCK_FILE"
     fi
