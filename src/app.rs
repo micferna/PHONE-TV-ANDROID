@@ -206,6 +206,8 @@ impl PhoneTvApp {
             dark_mode: self.dark_mode,
             replay_ratio: self.settings.replay_ratio,
             window_size: self.settings.window_size,
+            openrouter_api_key: self.settings.openrouter_api_key.clone(),
+            llm_model: self.settings.llm_model.clone(),
         };
         config::save_settings(&s);
     }

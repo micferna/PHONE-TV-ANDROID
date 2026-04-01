@@ -8,6 +8,14 @@ pub struct Settings {
     pub dark_mode: bool,
     pub replay_ratio: f32,
     pub window_size: (f32, f32),
+    #[serde(default)]
+    pub openrouter_api_key: String,
+    #[serde(default = "default_llm_model")]
+    pub llm_model: String,
+}
+
+fn default_llm_model() -> String {
+    "anthropic/claude-sonnet-4".to_string()
 }
 
 impl Default for Settings {
@@ -16,11 +24,13 @@ impl Default for Settings {
             dark_mode: true,
             replay_ratio: 12.0,
             window_size: (1000.0, 800.0),
+            openrouter_api_key: String::new(),
+            llm_model: default_llm_model(),
         }
     }
 }
 
-fn config_dir() -> PathBuf {
+pub fn config_dir() -> PathBuf {
     let dir = dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("phone-tv");
