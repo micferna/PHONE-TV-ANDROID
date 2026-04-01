@@ -1,5 +1,12 @@
 use std::process::{Child, ChildStdin};
 
+#[derive(Clone, PartialEq)]
+pub enum Severity {
+    Critical,
+    Warning,
+    Info,
+}
+
 #[derive(Clone, Default)]
 pub struct TransferState {
     pub active: bool,
