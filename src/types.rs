@@ -1,5 +1,12 @@
 use std::process::{Child, ChildStdin};
 
+use crate::brands::types::BrandDb;
+use crate::history::types::DeviceHistory;
+use crate::llm::types::AppVerdict;
+use crate::pentest::rootcheck::RootStatus;
+use crate::pentest::vulns::Vulnerability;
+use crate::wizard::types::DeviceInfo;
+
 #[derive(Clone, Default)]
 pub struct TransferState {
     pub active: bool,
@@ -32,6 +39,20 @@ pub enum BgEvent {
     BlacklistAlert { found: Vec<String> },
     AppActionResult { package: String, action: String, success: bool, message: String },
     SecurityAppsLoadingDone,
+    // Wizard events
+    WizardDeviceDetected { info: DeviceInfo },
+    WizardScanComplete { apps: Vec<AppInfo>, posture: Vec<DevicePosture>, score: u8, issues: Vec<SecurityIssue> },
+    WizardPentestComplete { vulns: Vec<Vulnerability>, root: RootStatus, risk_score: u8 },
+    WizardCleanProgress { package: String, action: String, success: bool, message: String },
+    WizardCleanComplete,
+    // LLM events
+    LlmAppVerdicts { verdicts: Vec<AppVerdict> },
+    LlmPentestReport { vulns: Vec<Vulnerability> },
+    LlmError { message: String },
+    // Brands events
+    BrandsLoaded { db: BrandDb },
+    // History events
+    HistoryLoaded { history: Option<DeviceHistory> },
 }
 
 #[derive(Clone, PartialEq)]
@@ -173,6 +194,7 @@ pub enum SecurityView {
     Blacklist,
     Monitoring,
     Posture,
+    Cleaning,
 }
 
 #[derive(Clone, Copy, PartialEq)]

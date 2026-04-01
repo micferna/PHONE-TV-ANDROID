@@ -720,6 +720,8 @@ impl PhoneTvApp {
                 BgEvent::SecurityAppsLoadingDone => {
                     self.security_apps_loading = false;
                 }
+                // Wizard, LLM, Brands, History events — handled by wizard module (stub for now)
+                _ => {}
             }
         }
     }

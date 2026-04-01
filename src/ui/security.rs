@@ -414,6 +414,7 @@ pub fn draw_security(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
         SecurityView::Blacklist => draw_blacklist(ui, app, ctx),
         SecurityView::Monitoring => draw_monitoring(ui, app, ctx),
         SecurityView::Posture => draw_posture(ui, app, ctx),
+        SecurityView::Cleaning => {} // Wizard cleaning view — rendered by wizard module
     }
 }
 
