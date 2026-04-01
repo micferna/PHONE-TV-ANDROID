@@ -12,6 +12,7 @@ use crate::config::{self, Settings};
 use crate::theme;
 use crate::types::*;
 use crate::ui;
+use crate::wizard::types::WizardState;
 
 pub struct PhoneTvApp {
     pub devices: Vec<Device>,
@@ -101,6 +102,7 @@ pub struct PhoneTvApp {
     pub confirm_uninstall: Option<String>,
     pub security_apps_loaded_count: usize,
     pub security_auto_loaded_device: Option<String>,
+    pub wizard: WizardState,
 }
 
 impl PhoneTvApp {
@@ -182,6 +184,7 @@ impl PhoneTvApp {
             confirm_uninstall: None,
             security_apps_loaded_count: 0,
             security_auto_loaded_device: None,
+            wizard: WizardState::default(),
         }
     }
 
@@ -722,8 +725,54 @@ impl PhoneTvApp {
                 BgEvent::SecurityAppsLoadingDone => {
                     self.security_apps_loading = false;
                 }
-                // Wizard, LLM, Brands, History events — handled by wizard module (stub for now)
-                _ => {}
+                BgEvent::WizardDeviceDetected { info } => {
+                    self.wizard.device_info = Some(info);
+                    self.wizard.step = crate::wizard::types::WizardStep::Scanning;
+                }
+                BgEvent::WizardScanComplete { apps, posture, score, issues } => {
+                    self.wizard.score_before = Some((score, issues));
+                    self.wizard.apps = apps;
+                    self.wizard.posture = posture;
+                    self.wizard.scan_loading = false;
+                    self.wizard.step = crate::wizard::types::WizardStep::Pentest;
+                }
+                BgEvent::WizardPentestComplete { vulns, root, risk_score } => {
+                    self.wizard.vulns = vulns;
+                    self.wizard.root_status = Some(root);
+                    self.wizard.risk_score = Some(risk_score);
+                    self.wizard.pentest_loading = false;
+                    self.wizard.step = crate::wizard::types::WizardStep::ProfileSelection;
+                }
+                BgEvent::WizardCleanProgress { package, action, success, message } => {
+                    self.wizard.clean_results.push(crate::wizard::types::CleanResult {
+                        package,
+                        action,
+                        success,
+                        message,
+                    });
+                    self.wizard.clean_progress += 1;
+                }
+                BgEvent::WizardCleanComplete => {
+                    self.wizard.cleaning = false;
+                    self.wizard.step = crate::wizard::types::WizardStep::Report;
+                }
+                BgEvent::LlmAppVerdicts { verdicts } => {
+                    self.wizard.ai_verdicts = verdicts.into_iter().map(|v| (v.package.clone(), v)).collect();
+                    self.wizard.ai_loading = false;
+                }
+                BgEvent::LlmPentestReport { vulns } => {
+                    self.wizard.vulns.extend(vulns);
+                }
+                BgEvent::LlmError { message } => {
+                    self.wizard.ai_loading = false;
+                    self.log(&format!("Erreur LLM: {}", message));
+                }
+                BgEvent::BrandsLoaded { db } => {
+                    self.wizard.brand_db = Some(db);
+                }
+                BgEvent::HistoryLoaded { history } => {
+                    self.wizard.history = history;
+                }
             }
         }
     }
