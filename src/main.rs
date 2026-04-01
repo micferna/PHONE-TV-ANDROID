@@ -5,6 +5,11 @@ mod security;
 mod theme;
 mod types;
 mod ui;
+mod brands;
+mod history;
+mod llm;
+mod pentest;
+mod wizard;
 
 use eframe::egui;
 
