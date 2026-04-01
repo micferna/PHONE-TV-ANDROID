@@ -1,0 +1,467 @@
+[meta]
+brand = "samsung"
+display_name = "Samsung"
+prefixes = ["com.samsung.", "com.sec.", "com.knox."]
+last_updated = "2026-04-02"
+
+# ── Trackers (profile: minimal) ─────────────────────────────────────────────
+
+[[bloatware]]
+package = "com.facebook.katana"
+category = "tracker"
+profile = "minimal"
+description = "Application principale Facebook"
+
+[[bloatware]]
+package = "com.facebook.system"
+category = "tracker"
+profile = "minimal"
+description = "Services système Facebook"
+
+[[bloatware]]
+package = "com.facebook.services"
+category = "tracker"
+profile = "minimal"
+description = "Services Facebook embarqués"
+
+[[bloatware]]
+package = "com.facebook.appmanager"
+category = "tracker"
+profile = "minimal"
+description = "Gestionnaire d'applications Facebook"
+
+[[bloatware]]
+package = "com.google.mainline.telemetry"
+category = "tracker"
+profile = "minimal"
+description = "Télémétrie Google mainline"
+
+[[bloatware]]
+package = "com.google.android.gms.location.history"
+category = "tracker"
+profile = "minimal"
+description = "Historique de localisation Google"
+
+[[bloatware]]
+package = "com.google.android.as.oss"
+category = "tracker"
+profile = "minimal"
+description = "Google Android System Intelligence (télémétrie)"
+
+[[bloatware]]
+package = "com.google.android.apps.turbo"
+category = "tracker"
+profile = "minimal"
+description = "Google Device Health Services"
+
+[[bloatware]]
+package = "com.google.android.feedback"
+category = "tracker"
+profile = "minimal"
+description = "Retours automatiques Google"
+
+[[bloatware]]
+package = "com.samsung.android.da.daagent"
+category = "tracker"
+profile = "minimal"
+description = "Samsung DA Agent (collecte de données)"
+
+[[bloatware]]
+package = "com.samsung.android.mdecservice"
+category = "tracker"
+profile = "minimal"
+description = "Samsung MDEC telemetry service"
+
+[[bloatware]]
+package = "com.samsung.android.rubin.app"
+category = "tracker"
+profile = "minimal"
+description = "Samsung Rubin (analyse comportementale)"
+
+[[bloatware]]
+package = "com.samsung.android.knox.analytics.uploader"
+category = "tracker"
+profile = "minimal"
+description = "Envoi d'analytiques Knox"
+
+# ── Samsung Bloatware (profile: moderate) ────────────────────────────────────
+
+[[bloatware]]
+package = "com.samsung.android.app.spage"
+category = "bloatware"
+profile = "moderate"
+description = "Samsung Free (flux d'actualités Bixby)"
+
+[[bloatware]]
+package = "com.samsung.android.app.settings.bixby"
+category = "bloatware"
+profile = "moderate"
+description = "Paramètres Bixby"
+
+[[bloatware]]
+package = "com.samsung.android.bixbyvision.framework"
+category = "bloatware"
+profile = "moderate"
+description = "Framework vision Bixby"
+
+[[bloatware]]
+package = "com.samsung.android.visionintelligence"
+category = "bloatware"
+profile = "moderate"
+description = "Intelligence visuelle Bixby"
+
+[[bloatware]]
+package = "com.samsung.android.aremoji"
+category = "bloatware"
+profile = "moderate"
+description = "AR Emoji Samsung"
+
+[[bloatware]]
+package = "com.samsung.android.ardrawing"
+category = "bloatware"
+profile = "moderate"
+description = "Dessin AR Samsung"
+
+[[bloatware]]
+package = "com.samsung.android.arzone"
+category = "bloatware"
+profile = "moderate"
+description = "AR Zone Samsung"
+
+[[bloatware]]
+package = "com.samsung.android.app.dressroom"
+category = "bloatware"
+profile = "moderate"
+description = "Dressing Room Samsung"
+
+[[bloatware]]
+package = "com.samsung.android.livestickers"
+category = "bloatware"
+profile = "moderate"
+description = "Stickers animés Samsung"
+
+[[bloatware]]
+package = "com.samsung.android.stickercenter"
+category = "bloatware"
+profile = "moderate"
+description = "Centre de stickers Samsung"
+
+[[bloatware]]
+package = "com.samsung.android.game.gamehome"
+category = "bloatware"
+profile = "moderate"
+description = "Samsung Game Launcher"
+
+[[bloatware]]
+package = "com.samsung.android.game.gametools"
+category = "bloatware"
+profile = "moderate"
+description = "Outils de jeu Samsung"
+
+[[bloatware]]
+package = "com.samsung.android.game.gos"
+category = "bloatware"
+profile = "moderate"
+description = "Samsung Game Optimizing Service"
+
+[[bloatware]]
+package = "com.samsung.android.forest"
+category = "bloatware"
+profile = "moderate"
+description = "Samsung Digital Wellbeing Forest"
+
+[[bloatware]]
+package = "com.samsung.android.themestore"
+category = "bloatware"
+profile = "moderate"
+description = "Samsung Theme Store"
+
+[[bloatware]]
+package = "com.samsung.android.themecenter"
+category = "bloatware"
+profile = "moderate"
+description = "Centre de thèmes Samsung"
+
+[[bloatware]]
+package = "com.samsung.android.scloud"
+category = "bloatware"
+profile = "moderate"
+description = "Samsung Cloud"
+
+[[bloatware]]
+package = "com.samsung.android.mobileservice"
+category = "bloatware"
+profile = "moderate"
+description = "Services mobiles Samsung"
+
+[[bloatware]]
+package = "com.samsung.android.samsungpass"
+category = "bloatware"
+profile = "moderate"
+description = "Samsung Pass (gestionnaire de mots de passe)"
+
+[[bloatware]]
+package = "com.samsung.android.samsungpassautofill"
+category = "bloatware"
+profile = "moderate"
+description = "Autofill Samsung Pass"
+
+[[bloatware]]
+package = "com.samsung.android.spayfw"
+category = "bloatware"
+profile = "moderate"
+description = "Samsung Pay framework"
+
+[[bloatware]]
+package = "com.samsung.android.smartmirroring"
+category = "bloatware"
+profile = "moderate"
+description = "Smart Mirroring Samsung"
+
+[[bloatware]]
+package = "com.samsung.android.lool"
+category = "bloatware"
+profile = "moderate"
+description = "Samsung Find My Mobile"
+
+[[bloatware]]
+package = "com.samsung.android.app.updatecenter"
+category = "bloatware"
+profile = "moderate"
+description = "Centre de mise à jour Samsung"
+
+[[bloatware]]
+package = "com.samsung.android.app.watchmanagerstub"
+category = "bloatware"
+profile = "moderate"
+description = "Gestionnaire Galaxy Watch (stub)"
+
+[[bloatware]]
+package = "com.samsung.android.kidsinstaller"
+category = "bloatware"
+profile = "moderate"
+description = "Samsung Kids Installer"
+
+[[bloatware]]
+package = "com.samsung.android.smartswitchassistant"
+category = "bloatware"
+profile = "moderate"
+description = "Assistant Smart Switch Samsung"
+
+[[bloatware]]
+package = "com.samsung.android.app.sharelive"
+category = "bloatware"
+profile = "moderate"
+description = "Samsung Share Live"
+
+[[bloatware]]
+package = "com.samsung.android.privateshare"
+category = "bloatware"
+profile = "moderate"
+description = "Samsung Private Share"
+
+[[bloatware]]
+package = "com.samsung.android.video"
+category = "bloatware"
+profile = "moderate"
+description = "Lecteur vidéo Samsung"
+
+[[bloatware]]
+package = "com.samsung.android.dynamiclock"
+category = "bloatware"
+profile = "moderate"
+description = "Écran de verrouillage dynamique Samsung"
+
+[[bloatware]]
+package = "com.samsung.android.app.dofviewer"
+category = "bloatware"
+profile = "moderate"
+description = "Visionneuse DOF Samsung"
+
+[[bloatware]]
+package = "com.samsung.android.app.reminder"
+category = "bloatware"
+profile = "moderate"
+description = "Rappels Samsung"
+
+[[bloatware]]
+package = "com.samsung.SMT"
+category = "bloatware"
+profile = "moderate"
+description = "Samsung Mobile Tracker"
+
+# ── Knox / Enterprise (profile: moderate) ────────────────────────────────────
+
+[[bloatware]]
+package = "com.samsung.android.knox.attestation"
+category = "enterprise"
+profile = "moderate"
+description = "Attestation Knox"
+
+[[bloatware]]
+package = "com.samsung.android.knox.containeragent"
+category = "enterprise"
+profile = "moderate"
+description = "Agent conteneur Knox"
+
+[[bloatware]]
+package = "com.samsung.android.knox.containercore"
+category = "enterprise"
+profile = "moderate"
+description = "Noyau conteneur Knox"
+
+[[bloatware]]
+package = "com.samsung.android.knox.kpecore"
+category = "enterprise"
+profile = "moderate"
+description = "Knox Platform for Enterprise core"
+
+[[bloatware]]
+package = "com.samsung.android.knox.pushmanager"
+category = "enterprise"
+profile = "moderate"
+description = "Gestionnaire de push Knox"
+
+[[bloatware]]
+package = "com.samsung.knox.securefolder"
+category = "enterprise"
+profile = "moderate"
+description = "Dossier sécurisé Knox"
+
+[[bloatware]]
+package = "com.samsung.android.mdm"
+category = "enterprise"
+profile = "moderate"
+description = "Samsung MDM (gestion d'appareils mobiles)"
+
+[[bloatware]]
+package = "com.samsung.android.mdx"
+category = "enterprise"
+profile = "moderate"
+description = "Samsung MDX"
+
+[[bloatware]]
+package = "com.samsung.android.mdx.kit"
+category = "enterprise"
+profile = "moderate"
+description = "Samsung MDX Kit"
+
+[[bloatware]]
+package = "com.samsung.android.mdx.quickboard"
+category = "enterprise"
+profile = "moderate"
+description = "Samsung MDX Quick Board"
+
+[[bloatware]]
+package = "com.knox.vpn.proxyhandler"
+category = "enterprise"
+profile = "moderate"
+description = "Gestionnaire proxy VPN Knox"
+
+[[bloatware]]
+package = "com.sec.enterprise.knox.cloudmdm.smdms"
+category = "enterprise"
+profile = "moderate"
+description = "Knox Cloud MDM"
+
+[[bloatware]]
+package = "com.samsung.klmsagent"
+category = "enterprise"
+profile = "moderate"
+description = "Knox License Management Service Agent"
+
+# ── Google (profile: aggressive) ─────────────────────────────────────────────
+
+[[bloatware]]
+package = "com.google.android.youtube"
+category = "google"
+profile = "aggressive"
+description = "YouTube Google"
+
+[[bloatware]]
+package = "com.google.android.apps.maps"
+category = "google"
+profile = "aggressive"
+description = "Google Maps"
+
+[[bloatware]]
+package = "com.google.android.gm"
+category = "google"
+profile = "aggressive"
+description = "Gmail"
+
+[[bloatware]]
+package = "com.google.android.googlequicksearchbox"
+category = "google"
+profile = "aggressive"
+description = "Google Search / Assistant"
+
+[[bloatware]]
+package = "com.google.android.apps.tachyon"
+category = "google"
+profile = "aggressive"
+description = "Google Meet (anciennement Duo)"
+
+[[bloatware]]
+package = "com.google.android.projection.gearhead"
+category = "google"
+profile = "aggressive"
+description = "Android Auto"
+
+[[bloatware]]
+package = "com.google.ar.core"
+category = "google"
+profile = "aggressive"
+description = "Google ARCore"
+
+# ── Microsoft (profile: aggressive) ──────────────────────────────────────────
+
+[[bloatware]]
+package = "com.microsoft.appmanager"
+category = "microsoft"
+profile = "aggressive"
+description = "Gestionnaire d'applications Microsoft"
+
+[[bloatware]]
+package = "com.microsoft.skydrive"
+category = "microsoft"
+profile = "aggressive"
+description = "Microsoft OneDrive"
+
+# ── Misc (profile: aggressive) ────────────────────────────────────────────────
+
+[[bloatware]]
+package = "com.netflix.mediaclient"
+category = "misc"
+profile = "aggressive"
+description = "Netflix"
+
+[[bloatware]]
+package = "com.netflix.partner.activation"
+category = "misc"
+profile = "aggressive"
+description = "Activation partenaire Netflix"
+
+[[bloatware]]
+package = "de.axelspringer.yana.zeropage"
+category = "misc"
+profile = "aggressive"
+description = "Upday (agrégateur d'actualités)"
+
+[[bloatware]]
+package = "com.hiya.star"
+category = "misc"
+profile = "aggressive"
+description = "Hiya (identification d'appels)"
+
+[[bloatware]]
+package = "com.android.chrome"
+category = "misc"
+profile = "aggressive"
+description = "Google Chrome"
+
+[[bloatware]]
+package = "com.aura.oobe.samsung.gl"
+category = "misc"
+profile = "aggressive"
+description = "Aura OOBE (gestionnaire de recommandations d'apps)"

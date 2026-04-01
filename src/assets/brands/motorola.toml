@@ -1,0 +1,325 @@
+[meta]
+brand = "motorola"
+display_name = "Motorola"
+prefixes = ["com.motorola.", "com.lenovo.", "com.lc.motorola."]
+last_updated = "2026-04-02"
+
+# ── Trackers (profile: minimal) ─────────────────────────────────────────────
+
+[[bloatware]]
+package = "com.inmobi.installer"
+category = "tracker"
+profile = "minimal"
+description = "InMobi ad SDK installer"
+
+[[bloatware]]
+package = "com.taboola.ody"
+category = "tracker"
+profile = "minimal"
+description = "Taboola flux de contenu sponsorisé"
+
+[[bloatware]]
+package = "com.facebook.system"
+category = "tracker"
+profile = "minimal"
+description = "Services système Facebook"
+
+[[bloatware]]
+package = "com.facebook.services"
+category = "tracker"
+profile = "minimal"
+description = "Services Facebook embarqués"
+
+[[bloatware]]
+package = "com.facebook.appmanager"
+category = "tracker"
+profile = "minimal"
+description = "Gestionnaire d'applications Facebook"
+
+[[bloatware]]
+package = "com.google.mainline.telemetry"
+category = "tracker"
+profile = "minimal"
+description = "Télémétrie Google mainline"
+
+[[bloatware]]
+package = "com.google.android.gms.location.history"
+category = "tracker"
+profile = "minimal"
+description = "Historique de localisation Google"
+
+[[bloatware]]
+package = "com.google.android.as.oss"
+category = "tracker"
+profile = "minimal"
+description = "Google Android System Intelligence (télémétrie)"
+
+[[bloatware]]
+package = "com.google.android.apps.turbo"
+category = "tracker"
+profile = "minimal"
+description = "Google Device Health Services"
+
+[[bloatware]]
+package = "com.google.android.feedback"
+category = "tracker"
+profile = "minimal"
+description = "Retours automatiques Google"
+
+[[bloatware]]
+package = "com.google.android.adservices.api"
+category = "tracker"
+profile = "minimal"
+description = "API Google AdServices (Privacy Sandbox)"
+
+[[bloatware]]
+package = "com.google.mainline.adservices"
+category = "tracker"
+profile = "minimal"
+description = "Google mainline AdServices"
+
+[[bloatware]]
+package = "com.google.android.federatedcompute"
+category = "tracker"
+profile = "minimal"
+description = "Apprentissage fédéré Google (collecte de données)"
+
+[[bloatware]]
+package = "com.google.android.ondevicepersonalization.services"
+category = "tracker"
+profile = "minimal"
+description = "Personnalisation on-device Google"
+
+# ── Motorola Bloatware (profile: moderate) ───────────────────────────────────
+
+[[bloatware]]
+package = "com.motorola.paks"
+category = "bloatware"
+profile = "moderate"
+description = "Motorola Paks (installation d'apps partenaires)"
+
+[[bloatware]]
+package = "com.motorola.paks.notification"
+category = "bloatware"
+profile = "moderate"
+description = "Notifications Motorola Paks"
+
+[[bloatware]]
+package = "com.motorola.ccc"
+category = "bloatware"
+profile = "moderate"
+description = "Motorola CCC (gestion des mises à jour)"
+
+[[bloatware]]
+package = "com.motorola.ccc.mainplm"
+category = "bloatware"
+profile = "moderate"
+description = "Motorola CCC Main PLM"
+
+[[bloatware]]
+package = "com.motorola.ccc.notification"
+category = "bloatware"
+profile = "moderate"
+description = "Notifications Motorola CCC"
+
+[[bloatware]]
+package = "com.motorola.ccc.ota"
+category = "bloatware"
+profile = "moderate"
+description = "Motorola CCC OTA updater"
+
+[[bloatware]]
+package = "com.motorola.ccc.devicemanagement"
+category = "bloatware"
+profile = "moderate"
+description = "Gestion d'appareils Motorola CCC"
+
+[[bloatware]]
+package = "com.motorola.motocare"
+category = "bloatware"
+profile = "moderate"
+description = "Motorola Care (support et diagnostics)"
+
+[[bloatware]]
+package = "com.motorola.demo"
+category = "bloatware"
+profile = "moderate"
+description = "Mode démo Motorola"
+
+[[bloatware]]
+package = "com.motorola.genie"
+category = "bloatware"
+profile = "moderate"
+description = "Motorola Genie (recommandations d'apps)"
+
+[[bloatware]]
+package = "com.motorola.help"
+category = "bloatware"
+profile = "moderate"
+description = "Application Aide Motorola"
+
+[[bloatware]]
+package = "com.motorola.motosignature.app"
+category = "bloatware"
+profile = "moderate"
+description = "Motorola Signature App"
+
+[[bloatware]]
+package = "com.motorola.gamemode"
+category = "bloatware"
+profile = "moderate"
+description = "Mode jeu Motorola"
+
+[[bloatware]]
+package = "com.motorola.dolby.dolbyui.ui"
+category = "bloatware"
+profile = "moderate"
+description = "Interface Dolby Audio Motorola"
+
+[[bloatware]]
+package = "com.motorola.timeweatherwidget"
+category = "bloatware"
+profile = "moderate"
+description = "Widget heure et météo Motorola"
+
+[[bloatware]]
+package = "com.motorola.livewallpaper3"
+category = "bloatware"
+profile = "moderate"
+description = "Fonds d'écran animés Motorola"
+
+[[bloatware]]
+package = "com.motorola.motocit"
+category = "bloatware"
+profile = "moderate"
+description = "Motorola CIT (test d'usine)"
+
+[[bloatware]]
+package = "com.motorola.bach.modemstats"
+category = "bloatware"
+profile = "moderate"
+description = "Statistiques modem Motorola"
+
+# ── Enterprise (profile: moderate) ───────────────────────────────────────────
+
+[[bloatware]]
+package = "com.motorola.enterprise.adapter.service"
+category = "enterprise"
+profile = "moderate"
+description = "Service adaptateur entreprise Motorola"
+
+[[bloatware]]
+package = "com.motorola.enterprise.service"
+category = "enterprise"
+profile = "moderate"
+description = "Service entreprise Motorola"
+
+# ── Misc (profile: moderate) ─────────────────────────────────────────────────
+
+[[bloatware]]
+package = "com.dti.motorola"
+category = "misc"
+profile = "moderate"
+description = "DTI Motorola (app opérateur)"
+
+[[bloatware]]
+package = "com.aura.oobe.motorola"
+category = "misc"
+profile = "moderate"
+description = "Aura OOBE Motorola (recommandations d'apps)"
+
+[[bloatware]]
+package = "de.telekom.tsc"
+category = "misc"
+profile = "moderate"
+description = "Telekom Service Center"
+
+[[bloatware]]
+package = "com.longcheer.sidebar"
+category = "misc"
+profile = "moderate"
+description = "Sidebar Longcheer"
+
+[[bloatware]]
+package = "com.longcheer.android.gmsintegration"
+category = "misc"
+profile = "moderate"
+description = "Intégration GMS Longcheer"
+
+[[bloatware]]
+package = "com.lenovo.lsf.user"
+category = "misc"
+profile = "moderate"
+description = "Lenovo LSF User (services Lenovo)"
+
+[[bloatware]]
+package = "com.sprd.logmanager"
+category = "misc"
+profile = "moderate"
+description = "Gestionnaire de logs SPRD"
+
+[[bloatware]]
+package = "com.sprd.omacp"
+category = "misc"
+profile = "moderate"
+description = "OMA Client Provisioning SPRD"
+
+[[bloatware]]
+package = "com.sprd.providers.photos"
+category = "misc"
+profile = "moderate"
+description = "Fournisseur photos SPRD"
+
+[[bloatware]]
+package = "com.lc.motorola.coresettingsext"
+category = "misc"
+profile = "moderate"
+description = "Extension paramètres Motorola LC"
+
+[[bloatware]]
+package = "com.lc.android.providers.chromehomepageoverlay"
+category = "misc"
+profile = "moderate"
+description = "Overlay page d'accueil Chrome LC"
+
+[[bloatware]]
+package = "com.motorola.android.providers.chromehomepage"
+category = "misc"
+profile = "moderate"
+description = "Page d'accueil Chrome Motorola"
+
+[[bloatware]]
+package = "com.ape.setupwizard"
+category = "misc"
+profile = "moderate"
+description = "Assistant de configuration APE"
+
+[[bloatware]]
+package = "com.spreadtrum.proxy.nfwlocation"
+category = "misc"
+profile = "moderate"
+description = "Proxy localisation NFW Spreadtrum"
+
+[[bloatware]]
+package = "com.ts.tsgestures"
+category = "misc"
+profile = "moderate"
+description = "Gestes tactiles TS"
+
+[[bloatware]]
+package = "com.goodix.gftest"
+category = "misc"
+profile = "moderate"
+description = "Test capteur empreinte Goodix"
+
+[[bloatware]]
+package = "com.fingerprints.sensortesttool"
+category = "misc"
+profile = "moderate"
+description = "Outil de test capteur empreinte"
+
+[[bloatware]]
+package = "com.google.ambient.streaming"
+category = "misc"
+profile = "moderate"
+description = "Google Ambient Streaming"
