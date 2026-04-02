@@ -111,16 +111,15 @@ fn draw_step_detection(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Cont
         // Show spinner and auto-trigger detection
         ui.horizontal(|ui| {
             ui.spinner();
-            ui.label("Detection en cours...");
+            ui.label("Detection de l'appareil en cours...");
         });
 
-        // Trigger detection if we have a device selected
+        // Trigger detection only once
         if let Some(device_id) = app.get_selected_id() {
-            let tx = app.bg_tx.clone();
-            let ctx_clone = ctx.clone();
-            // Only trigger once (when scan_loading is not set, we re-use that flag)
-            if !app.wizard.scan_loading {
-                app.wizard.scan_loading = true;
+            if !app.wizard.detection_triggered {
+                app.wizard.detection_triggered = true;
+                let tx = app.bg_tx.clone();
+                let ctx_clone = ctx.clone();
                 wizard::trigger_detection(&device_id, &tx, &ctx_clone);
             }
         } else {
@@ -132,9 +131,6 @@ fn draw_step_detection(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Cont
         }
         return;
     }
-
-    // Device info detected
-    app.wizard.scan_loading = false;
 
     if let Some(info) = &app.wizard.device_info.clone() {
         egui::Frame::none()

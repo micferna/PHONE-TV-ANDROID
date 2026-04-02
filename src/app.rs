@@ -739,7 +739,7 @@ impl PhoneTvApp {
                 }
                 BgEvent::WizardDeviceDetected { info } => {
                     self.wizard.device_info = Some(info);
-                    self.wizard.step = crate::wizard::types::WizardStep::Scanning;
+                    // Reste sur Detection — l'utilisateur clique "Lancer le scan" pour avancer
                 }
                 BgEvent::WizardScanComplete { apps, posture, score, issues } => {
                     self.wizard.score_before = Some((score, issues));
