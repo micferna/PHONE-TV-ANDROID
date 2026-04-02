@@ -904,5 +904,8 @@ impl eframe::App for PhoneTvApp {
                 }
             });
         });
+
+        // Wizard overlay
+        ui::draw_wizard(self, ctx);
     }
 }
