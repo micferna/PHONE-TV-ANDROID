@@ -422,9 +422,29 @@ pub fn draw_security(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
             // OpenRouter API settings
             ui.collapsing("Configuration IA", |ui| {
                 ui.label("Cle API OpenRouter:");
-                ui.text_edit_singleline(&mut app.settings.openrouter_api_key);
+                ui.add(egui::TextEdit::singleline(&mut app.settings.openrouter_api_key).password(true));
                 ui.label("Modele LLM:");
-                ui.text_edit_singleline(&mut app.settings.llm_model);
+                let models = [
+                    "anthropic/claude-sonnet-4",
+                    "anthropic/claude-haiku-4",
+                    "google/gemini-2.5-flash",
+                    "google/gemini-2.5-pro",
+                    "openai/gpt-4o",
+                    "openai/gpt-4o-mini",
+                    "meta-llama/llama-4-maverick",
+                    "meta-llama/llama-4-scout",
+                    "deepseek/deepseek-chat-v3",
+                    "qwen/qwen3-235b-a22b",
+                    "mistralai/mistral-medium",
+                ];
+                egui::ComboBox::from_id_salt("llm_model_selector")
+                    .selected_text(&app.settings.llm_model)
+                    .width(300.0)
+                    .show_ui(ui, |ui| {
+                        for model in &models {
+                            ui.selectable_value(&mut app.settings.llm_model, model.to_string(), *model);
+                        }
+                    });
                 if ui.button("Sauvegarder").clicked() {
                     app.save_settings();
                 }

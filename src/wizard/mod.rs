@@ -77,10 +77,19 @@ pub fn trigger_scan(device_id: &str, tx: &mpsc::Sender<BgEvent>, ctx: &egui::Con
     let ctx = ctx.clone();
     std::thread::spawn(move || {
         let all_packages = apps::list_packages(&id, AppFilter::All);
+        let total = all_packages.len();
+        let _ = tx.send(BgEvent::Log(format!("Scan: {} packages detectes", total)));
+        ctx.request_repaint();
+
         let mut app_infos = Vec::new();
-        for pkg in &all_packages {
+        for (i, pkg) in all_packages.iter().enumerate() {
             if let Some(info) = apps::get_app_detail(&id, pkg) {
                 app_infos.push(info);
+            }
+            // Send progress every 20 apps
+            if (i + 1) % 20 == 0 || i + 1 == total {
+                let _ = tx.send(BgEvent::Log(format!("Scan: {}/{} apps analysees", i + 1, total)));
+                ctx.request_repaint();
             }
         }
         let posture_checks = posture::check_device_posture(&id);

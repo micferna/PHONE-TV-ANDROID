@@ -233,6 +233,12 @@ fn draw_step_scanning(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Conte
             ui.spinner();
             ui.label("Scan en cours (apps, securite, posture)...");
         });
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new("Analyse de chaque application — cela peut prendre quelques minutes")
+                .size(12.0)
+                .color(theme::text_secondary(app.dark_mode)),
+        );
         return;
     }
 
