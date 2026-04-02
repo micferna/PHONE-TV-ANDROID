@@ -364,6 +364,7 @@ pub fn draw_security(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
                 ),
                 (SecurityView::Monitoring, "\u{1f4ca} Monitoring", None),
                 (SecurityView::Posture, "\u{2699} Posture", None),
+                (SecurityView::Cleaning, "\u{1f9f9} Nettoyage", None),
             ];
 
             for (view, label, alert_color) in tabs {
@@ -414,7 +415,54 @@ pub fn draw_security(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
         SecurityView::Blacklist => draw_blacklist(ui, app, ctx),
         SecurityView::Monitoring => draw_monitoring(ui, app, ctx),
         SecurityView::Posture => draw_posture(ui, app, ctx),
-        SecurityView::Cleaning => {} // Wizard cleaning view — rendered by wizard module
+        SecurityView::Cleaning => {
+            ui.heading("Nettoyage");
+            ui.add_space(8.0);
+
+            // OpenRouter API settings
+            ui.collapsing("Configuration IA", |ui| {
+                ui.label("Cle API OpenRouter:");
+                ui.text_edit_singleline(&mut app.settings.openrouter_api_key);
+                ui.label("Modele LLM:");
+                ui.text_edit_singleline(&mut app.settings.llm_model);
+                if ui.button("Sauvegarder").clicked() {
+                    app.save_settings();
+                }
+            });
+            ui.add_space(12.0);
+
+            // Launch wizard button
+            if ui.button(egui::RichText::new("Lancer l'assistant de nettoyage complet").size(14.0)).clicked() {
+                app.wizard.start();
+            }
+
+            // Show device history
+            if let Some(id) = app.get_selected_id() {
+                if let Some(serial_raw) = crate::adb::adb_device(&id, &["shell", "getprop", "ro.serialno"]) {
+                    let serial = serial_raw.trim().to_string();
+                    if let Some(history) = crate::history::load_history(&serial) {
+                        ui.add_space(16.0);
+                        ui.label(egui::RichText::new("Historique").size(16.0).strong());
+                        ui.label(format!("Appareil: {}", history.display_name));
+                        ui.label(format!("Premiere connexion: {}", history.first_seen));
+
+                        for session in history.sessions.iter().rev().take(5) {
+                            ui.add_space(8.0);
+                            ui.group(|ui| {
+                                ui.label(egui::RichText::new(&session.date).strong());
+                                ui.label(format!("Score: {} -> {}", session.score_before, session.score_after));
+                                ui.label(format!("Profil: {}", session.profile_used));
+                                ui.label(format!("{} supprimees, {} desactivees, {} echecs",
+                                    session.apps_removed.len(),
+                                    session.apps_disabled.len(),
+                                    session.apps_failed.len(),
+                                ));
+                            });
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
