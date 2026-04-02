@@ -101,6 +101,7 @@ pub fn draw_sidebar(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context
             (Tab::Tv, "📺  TV"),
             (Tab::Video, "🎬  Vidéo"),
             (Tab::Security, "🛡  Sécurité"),
+            (Tab::Audit, "🧹  Audit & Nettoyage"),
         ];
 
         for (tab, label) in tabs {

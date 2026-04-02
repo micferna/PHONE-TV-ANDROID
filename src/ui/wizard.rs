@@ -229,13 +229,15 @@ fn draw_step_scanning(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Conte
     ui.add_space(8.0);
 
     if app.wizard.scan_loading {
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.label("Scan en cours (apps, securite, posture)...");
-        });
+        ui.label(egui::RichText::new("Scan en cours...").size(14.0));
+        ui.add_space(8.0);
+        let progress = app.wizard.scan_progress;
+        ui.add(egui::ProgressBar::new(progress)
+            .text(format!("{:.0}%", progress * 100.0))
+            .animate(true));
         ui.add_space(4.0);
         ui.label(
-            egui::RichText::new("Analyse de chaque application — cela peut prendre quelques minutes")
+            egui::RichText::new("Analyse de chaque application installee")
                 .size(12.0)
                 .color(theme::text_secondary(app.dark_mode)),
         );

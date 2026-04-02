@@ -364,7 +364,6 @@ pub fn draw_security(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
                 ),
                 (SecurityView::Monitoring, "\u{1f4ca} Monitoring", None),
                 (SecurityView::Posture, "\u{2699} Posture", None),
-                (SecurityView::Cleaning, "\u{1f9f9} Nettoyage", None),
             ];
 
             for (view, label, alert_color) in tabs {

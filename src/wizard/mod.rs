@@ -86,9 +86,9 @@ pub fn trigger_scan(device_id: &str, tx: &mpsc::Sender<BgEvent>, ctx: &egui::Con
             if let Some(info) = apps::get_app_detail(&id, pkg) {
                 app_infos.push(info);
             }
-            // Send progress every 20 apps
-            if (i + 1) % 20 == 0 || i + 1 == total {
-                let _ = tx.send(BgEvent::Log(format!("Scan: {}/{} apps analysees", i + 1, total)));
+            // Send progress every 5 apps
+            if (i + 1) % 5 == 0 || i + 1 == total {
+                let _ = tx.send(BgEvent::WizardScanProgress { current: i + 1, total });
                 ctx.request_repaint();
             }
         }

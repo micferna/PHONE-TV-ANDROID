@@ -103,6 +103,7 @@ pub struct PhoneTvApp {
     pub security_apps_loaded_count: usize,
     pub security_auto_loaded_device: Option<String>,
     pub wizard: WizardState,
+    pub llm_model_status: Option<(bool, String)>,
 }
 
 impl PhoneTvApp {
@@ -185,6 +186,7 @@ impl PhoneTvApp {
             security_apps_loaded_count: 0,
             security_auto_loaded_device: None,
             wizard: WizardState::default(),
+            llm_model_status: None,
         }
     }
 
@@ -228,6 +230,7 @@ impl PhoneTvApp {
                 .unwrap_or(false),
             Tab::Video => self.get_selected_id().is_some(),
             Tab::Security => self.get_selected_id().is_some(),
+            Tab::Audit => self.get_selected_id().is_some(),
         }
     }
 
@@ -725,6 +728,12 @@ impl PhoneTvApp {
                 BgEvent::SecurityAppsLoadingDone => {
                     self.security_apps_loading = false;
                 }
+                BgEvent::WizardScanProgress { current, total } => {
+                    self.wizard.scan_progress = current as f32 / total as f32;
+                }
+                BgEvent::LlmModelValid { valid, model, error } => {
+                    self.llm_model_status = Some((valid, error.unwrap_or_else(|| format!("{} OK", model))));
+                }
                 BgEvent::WizardDeviceDetected { info } => {
                     self.wizard.device_info = Some(info);
                     self.wizard.step = crate::wizard::types::WizardStep::Scanning;
@@ -909,6 +918,7 @@ impl eframe::App for PhoneTvApp {
                     Tab::Phone => ui::draw_phone(self, ui, ctx),
                     Tab::Video => ui::draw_video(self, ui, ctx),
                     Tab::Security => ui::draw_security(self, ui, ctx),
+                    Tab::Audit => ui::draw_audit(self, ui, ctx),
                 }
             });
         });

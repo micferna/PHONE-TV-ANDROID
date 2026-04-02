@@ -60,6 +60,37 @@ pub fn check_rootability(api_key: &str, model: &str, brand: &str, device_model: 
         .map_err(|e| format!("Erreur parsing rootabilite: {}", e))
 }
 
+pub fn validate_model(api_key: &str, model: &str) -> Result<bool, String> {
+    let client = reqwest::blocking::Client::new();
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "test"}],
+        "max_tokens": 1
+    });
+
+    let resp = client
+        .post("https://openrouter.ai/api/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .map_err(|e| format!("Erreur reseau: {}", e))?;
+
+    if resp.status().is_success() {
+        Ok(true)
+    } else {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        if body.contains("model") || body.contains("invalid") || status.as_u16() == 404 {
+            Err(format!("Modele '{}' invalide ou non disponible", model))
+        } else if status.as_u16() == 401 {
+            Err("Cle API invalide".to_string())
+        } else {
+            Err(format!("Erreur {}: {}", status, &body[..100.min(body.len())]))
+        }
+    }
+}
+
 fn extract_json_object(text: &str) -> &str {
     if let Some(start) = text.find('{') {
         if let Some(end) = text.rfind('}') {
