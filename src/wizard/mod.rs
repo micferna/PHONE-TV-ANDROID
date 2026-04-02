@@ -83,13 +83,10 @@ pub fn trigger_scan(device_id: &str, tx: &mpsc::Sender<BgEvent>, ctx: &egui::Con
 
         let mut app_infos = Vec::new();
         for (i, pkg) in all_packages.iter().enumerate() {
+            let _ = tx.send(BgEvent::WizardScanProgress { current: i + 1, total, package: pkg.clone() });
+            ctx.request_repaint();
             if let Some(info) = apps::get_app_detail(&id, pkg) {
                 app_infos.push(info);
-            }
-            // Send progress every 5 apps
-            if (i + 1) % 5 == 0 || i + 1 == total {
-                let _ = tx.send(BgEvent::WizardScanProgress { current: i + 1, total });
-                ctx.request_repaint();
             }
         }
         let posture_checks = posture::check_device_posture(&id);

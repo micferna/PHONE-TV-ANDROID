@@ -728,8 +728,11 @@ impl PhoneTvApp {
                 BgEvent::SecurityAppsLoadingDone => {
                     self.security_apps_loading = false;
                 }
-                BgEvent::WizardScanProgress { current, total } => {
+                BgEvent::WizardScanProgress { current, total, package } => {
                     self.wizard.scan_progress = current as f32 / total as f32;
+                    self.wizard.scan_current = current;
+                    self.wizard.scan_total = total;
+                    self.wizard.scan_current_package = package;
                 }
                 BgEvent::LlmModelValid { valid, model, error } => {
                     self.llm_model_status = Some((valid, error.unwrap_or_else(|| format!("{} OK", model))));

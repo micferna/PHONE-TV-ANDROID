@@ -229,18 +229,37 @@ fn draw_step_scanning(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Conte
     ui.add_space(8.0);
 
     if app.wizard.scan_loading {
-        ui.label(egui::RichText::new("Scan en cours...").size(14.0));
-        ui.add_space(8.0);
+        ui.label(egui::RichText::new("Scan en cours...").size(16.0).strong());
+        ui.add_space(12.0);
+
+        let current = app.wizard.scan_current;
+        let total = app.wizard.scan_total;
         let progress = app.wizard.scan_progress;
+
+        // Barre de progression avec compteur DANS la barre
+        let bar_text = if total > 0 {
+            format!("{} / {} applications ({:.0}%)", current, total, progress * 100.0)
+        } else {
+            "Chargement de la liste des packages...".to_string()
+        };
         ui.add(egui::ProgressBar::new(progress)
-            .text(format!("{:.0}%", progress * 100.0))
-            .animate(true));
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new("Analyse de chaque application installee")
-                .size(12.0)
-                .color(theme::text_secondary(app.dark_mode)),
-        );
+            .text(bar_text)
+            .desired_width(ui.available_width()));
+
+        ui.add_space(8.0);
+
+        // Nom du package en cours d'analyse
+        if !app.wizard.scan_current_package.is_empty() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(
+                    egui::RichText::new(format!("Analyse: {}", app.wizard.scan_current_package))
+                        .size(12.0)
+                        .family(egui::FontFamily::Monospace)
+                        .color(theme::text_secondary(app.dark_mode)),
+                );
+            });
+        }
         return;
     }
 
@@ -916,15 +935,27 @@ fn draw_step_cleaning(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Conte
     // Show progress
     if app.wizard.clean_total > 0 {
         let progress = app.wizard.clean_progress as f32 / app.wizard.clean_total as f32;
+        let bar_text = format!("{} / {} ({:.0}%)", app.wizard.clean_progress, app.wizard.clean_total, progress * 100.0);
         ui.add(egui::ProgressBar::new(progress)
-            .text(format!("{}/{}", app.wizard.clean_progress, app.wizard.clean_total)));
+            .text(bar_text)
+            .desired_width(ui.available_width()));
         ui.add_space(8.0);
     }
 
     if app.wizard.cleaning {
         ui.horizontal(|ui| {
             ui.spinner();
-            ui.label("Nettoyage en cours...");
+            // Show the last action being processed
+            if let Some(last) = app.wizard.clean_results.last() {
+                ui.label(
+                    egui::RichText::new(format!("En cours: {}", last.package))
+                        .size(12.0)
+                        .family(egui::FontFamily::Monospace)
+                        .color(theme::text_secondary(app.dark_mode)),
+                );
+            } else {
+                ui.label("Demarrage du nettoyage...");
+            }
         });
         ui.add_space(8.0);
     }

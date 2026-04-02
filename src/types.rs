@@ -41,10 +41,13 @@ pub enum BgEvent {
     SecurityAppsLoadingDone,
     // Wizard events
     WizardDeviceDetected { info: DeviceInfo },
+    WizardScanProgress { current: usize, total: usize, package: String },
     WizardScanComplete { apps: Vec<AppInfo>, posture: Vec<DevicePosture>, score: u8, issues: Vec<SecurityIssue> },
     WizardPentestComplete { vulns: Vec<Vulnerability>, root: RootStatus, risk_score: u8 },
     WizardCleanProgress { package: String, action: String, success: bool, message: String },
     WizardCleanComplete,
+    // Model validation
+    LlmModelValid { valid: bool, model: String, error: Option<String> },
     // LLM events
     LlmAppVerdicts { verdicts: Vec<AppVerdict> },
     LlmPentestReport { vulns: Vec<Vulnerability> },
@@ -71,6 +74,7 @@ pub enum Tab {
     Phone,
     Video,
     Security,
+    Audit,
 }
 
 #[derive(Clone)]
