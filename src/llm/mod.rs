@@ -15,7 +15,7 @@ pub fn call_openrouter(api_key: &str, model: &str, prompt: &str) -> Result<Strin
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.1,
-        "max_tokens": 4096
+        "max_tokens": 8192
     });
 
     let resp = client
@@ -27,15 +27,14 @@ pub fn call_openrouter(api_key: &str, model: &str, prompt: &str) -> Result<Strin
         .map_err(|e| format!("Erreur reseau: {}", e))?;
 
     let status = resp.status();
-    // Lire le body comme texte brut d'abord
     let body_text = resp.text().map_err(|e| format!("Erreur lecture reponse: {}", e))?;
 
     if !status.is_success() {
-        return Err(format!("Erreur API {}: {}", status, &body_text[..200.min(body_text.len())]));
+        return Err(format!("Erreur API {}: {}", status, &body_text[..500.min(body_text.len())]));
     }
 
     let json: serde_json::Value = serde_json::from_str(&body_text)
-        .map_err(|e| format!("Erreur parsing JSON: {} — reponse brute: {}", e, &body_text[..300.min(body_text.len())]))?;
+        .map_err(|e| format!("Erreur parsing reponse API: {} — debut: {}", e, &body_text[..300.min(body_text.len())]))?;
 
     let message = &json["choices"][0]["message"];
 
@@ -45,13 +44,11 @@ pub fn call_openrouter(api_key: &str, model: &str, prompt: &str) -> Result<Strin
             return Ok(content.to_string());
         }
     }
-    // Certains modeles mettent la reponse dans reasoning
     if let Some(reasoning) = message["reasoning"].as_str() {
         if !reasoning.is_empty() {
             return Ok(reasoning.to_string());
         }
     }
-    // Ou dans reasoning_details[].text
     if let Some(details) = message["reasoning_details"].as_array() {
         let texts: Vec<&str> = details.iter()
             .filter_map(|d| d["text"].as_str())
@@ -61,21 +58,22 @@ pub fn call_openrouter(api_key: &str, model: &str, prompt: &str) -> Result<Strin
         }
     }
 
-    Err(format!("Reponse vide du LLM — reponse brute: {}", &body_text[..500.min(body_text.len())]))
+    Err(format!("Reponse vide du LLM: {}", &body_text[..500.min(body_text.len())]))
 }
 
-pub fn analyze_apps(api_key: &str, model: &str, apps: &[(String, Vec<String>, String)]) -> Result<Vec<AppVerdict>, String> {
-    let prompt = prompts::app_analysis_prompt(apps);
+/// Analyse COMPLETE de toutes les apps par l'IA — pas juste les inconnues
+pub fn analyze_all_apps(api_key: &str, model: &str, apps: &[(String, Vec<String>, String)]) -> Result<Vec<AppVerdict>, String> {
+    let prompt = prompts::full_analysis_prompt(apps);
     let response = call_openrouter(api_key, model, &prompt)?;
-    let json_str = extract_json(&response);
+    let json_str = extract_json_array(&response);
 
     serde_json::from_str::<Vec<AppVerdict>>(json_str)
-        .map_err(|e| format!("Erreur parsing verdicts: {}", e))
+        .map_err(|e| format!("Erreur parsing IA: {} — extrait: {}", e, &json_str[..200.min(json_str.len())]))
 }
 
 pub fn analyze_pentest(api_key: &str, model: &str, prompt: &str) -> Result<Vec<LlmVuln>, String> {
     let response = call_openrouter(api_key, model, prompt)?;
-    let json_str = extract_json(&response);
+    let json_str = extract_json_array(&response);
 
     serde_json::from_str::<Vec<LlmVuln>>(json_str)
         .map_err(|e| format!("Erreur parsing pentest: {}", e))
@@ -91,11 +89,15 @@ pub fn check_rootability(api_key: &str, model: &str, brand: &str, device_model: 
 }
 
 pub fn validate_model(api_key: &str, model: &str) -> Result<bool, String> {
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Erreur: {}", e))?;
+
     let body = serde_json::json!({
         "model": model,
-        "messages": [{"role": "user", "content": "test"}],
-        "max_tokens": 1
+        "messages": [{"role": "user", "content": "Reponds OK"}],
+        "max_tokens": 5
     });
 
     let resp = client
@@ -106,35 +108,56 @@ pub fn validate_model(api_key: &str, model: &str) -> Result<bool, String> {
         .send()
         .map_err(|e| format!("Erreur reseau: {}", e))?;
 
-    if resp.status().is_success() {
+    let status = resp.status();
+    let body_text = resp.text().unwrap_or_default();
+
+    if status.is_success() {
         Ok(true)
+    } else if status.as_u16() == 401 {
+        Err("Cle API invalide".to_string())
     } else {
-        let status = resp.status();
-        let body = resp.text().unwrap_or_default();
-        if body.contains("model") || body.contains("invalid") || status.as_u16() == 404 {
-            Err(format!("Modele '{}' invalide ou non disponible", model))
-        } else if status.as_u16() == 401 {
-            Err("Cle API invalide".to_string())
-        } else {
-            Err(format!("Erreur {}: {}", status, &body[..100.min(body.len())]))
-        }
+        Err(format!("Modele '{}' — erreur {}", model, status))
     }
 }
 
+/// Extrait un tableau JSON d'une reponse LLM (gere ```json ... ```)
+fn extract_json_array(text: &str) -> &str {
+    // D'abord retirer les blocs markdown ```json ... ```
+    let clean = strip_markdown_code(text);
+
+    if let Some(start) = clean.find('[') {
+        if let Some(end) = clean.rfind(']') {
+            return &clean[start..=end];
+        }
+    }
+    clean
+}
+
+/// Extrait un objet JSON d'une reponse LLM
 fn extract_json_object(text: &str) -> &str {
-    if let Some(start) = text.find('{') {
-        if let Some(end) = text.rfind('}') {
-            return &text[start..=end];
+    let clean = strip_markdown_code(text);
+
+    if let Some(start) = clean.find('{') {
+        if let Some(end) = clean.rfind('}') {
+            return &clean[start..=end];
         }
     }
-    text
+    clean
 }
 
-fn extract_json(text: &str) -> &str {
-    if let Some(start) = text.find('[') {
-        if let Some(end) = text.rfind(']') {
-            return &text[start..=end];
+/// Retire les blocs ```json ... ``` ou ``` ... ```
+fn strip_markdown_code(text: &str) -> &str {
+    let trimmed = text.trim();
+    if trimmed.starts_with("```") {
+        // Trouver la fin du premier ``` (peut etre ```json\n)
+        if let Some(first_newline) = trimmed.find('\n') {
+            let rest = &trimmed[first_newline + 1..];
+            // Trouver le ``` de fermeture
+            if let Some(end) = rest.rfind("```") {
+                return rest[..end].trim();
+            }
+            return rest.trim();
         }
     }
-    text
+    trimmed
 }

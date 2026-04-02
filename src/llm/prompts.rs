@@ -1,6 +1,8 @@
 use crate::pentest::rootcheck::RootStatus;
 
-pub fn app_analysis_prompt(apps: &[(String, Vec<String>, String)]) -> String {
+/// Prompt principal — L'IA analyse TOUTES les apps du telephone
+/// C'est l'IA qui decide ce qui est bloatware, pas nos filtres
+pub fn full_analysis_prompt(apps: &[(String, Vec<String>, String)]) -> String {
     let mut app_list = String::new();
     for (pkg, perms, source) in apps {
         app_list.push_str(&format!("- {} (source: {}, permissions: {})\n",
@@ -9,17 +11,30 @@ pub fn app_analysis_prompt(apps: &[(String, Vec<String>, String)]) -> String {
         ));
     }
 
-    format!(r#"Tu es un expert en securite mobile Android.
-Analyse les apps Android suivantes et determine pour chacune:
-- verdict: "bloatware" / "legitime" / "suspect"
-- category: "tracker" / "bloatware" / "google" / "microsoft" / "enterprise" / "misc"
-- profile: "minimal" / "moderate" / "aggressive"
-- explanation: explication courte (1 phrase)
+    format!(r#"Tu es un expert en securite mobile Android et en vie privee.
 
-Reponds UNIQUEMENT en JSON valide, format:
+Voici la liste COMPLETE des applications installees sur un telephone Android.
+Analyse CHAQUE application et identifie:
+- Les bloatwares du fabricant (apps pre-installees inutiles)
+- Les trackers et services publicitaires
+- Les apps de telemetrie/analytics
+- Les services enterprise inutiles pour un usage personnel
+- Les apps avec des permissions dangereuses ou excessives
+- Les apps suspectes ou potentiellement malveillantes
+
+Pour CHAQUE app que tu identifies comme problematique, retourne:
+- package: le nom du package
+- verdict: "bloatware" / "suspect" / "tracker"
+- category: "tracker" / "bloatware" / "google" / "microsoft" / "enterprise" / "misc"
+- profile: "minimal" (trackers/pubs) / "moderate" (+ bloatware fabricant) / "aggressive" (+ apps non essentielles)
+- explanation: explication courte en francais
+
+NE RETOURNE QUE les apps problematiques. Les apps systeme essentielles (launcher, phone, settings, etc.) ne doivent PAS apparaitre.
+
+Reponds UNIQUEMENT avec un tableau JSON valide, sans markdown, sans ```, juste le JSON:
 [{{"package":"com.example","verdict":"bloatware","category":"tracker","profile":"minimal","explanation":"Tracker publicitaire"}}]
 
-APPS:
+APPLICATIONS INSTALLEES:
 {}"#, app_list)
 }
 
@@ -32,11 +47,8 @@ TELEPHONE:
 - Android: {}
 - Patch securite: {}
 
-Reponds UNIQUEMENT en JSON valide avec ce format exact:
-{{"rootable": true/false, "confidence": "haute/moyenne/basse", "method": "methode de root ou null", "details": "explication courte", "risks": "risques du root"}}
-
-Si tu n'es pas sur, mets confidence "basse". Sois precis sur la methode (Magisk via TWRP, Magisk via patch boot.img, KingRoot, etc).
-N'invente pas — si tu ne connais pas ce modele specifique, dis-le."#,
+Reponds UNIQUEMENT en JSON valide sans markdown sans ```, juste le JSON:
+{{"rootable": true/false, "confidence": "haute/moyenne/basse", "method": "methode de root ou null", "details": "explication courte", "risks": "risques du root"}}"#,
         brand, model, android_version, security_patch
     )
 }
@@ -75,7 +87,7 @@ APPS SUSPECTES:
 PORTS OUVERTS:
 {:?}
 
-Pour chaque faille trouvee, reponds UNIQUEMENT en JSON valide:
+Pour chaque faille trouvee, reponds UNIQUEMENT en JSON valide sans markdown:
 [{{"description":"...","severity":"critique/haute/moyenne/basse","patchable":true/false,"fix_action":"commande ou null","risk":"..."}}]"#,
         model, android_version, sdk, security_patch, selinux, bootloader, root_status,
         suspicious_apps.join("\n"),

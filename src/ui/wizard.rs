@@ -751,21 +751,29 @@ fn draw_step_ai(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
     // No verdicts yet - show trigger button
     if app.wizard.ai_verdicts.is_empty() {
-        ui.label(format!(
-            "{} application(s) inconnue(s) a analyser.",
-            app.wizard.unknown_apps.len()
-        ));
-        ui.add_space(8.0);
+        let total_apps = app.wizard.apps.len();
+        ui.label(
+            egui::RichText::new(format!(
+                "L'IA va analyser les {} applications installees pour detecter les bloatwares, trackers et apps suspectes.",
+                total_apps
+            )).size(13.0),
+        );
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new("L'IA peut trouver des problemes que nos filtres locaux n'ont pas. Les nouveaux bloatwares detectes seront ajoutes a la base pour les prochains scans.")
+                .size(12.0)
+                .color(theme::text_secondary(app.dark_mode)),
+        );
+        ui.add_space(12.0);
 
         if ui
             .add(egui::Button::new(
-                egui::RichText::new("Lancer l'analyse IA").size(14.0).strong(),
+                egui::RichText::new("Lancer l'analyse IA complete").size(14.0).strong(),
             ))
             .clicked()
         {
             let api_key = app.settings.openrouter_api_key.clone();
             let model = app.settings.llm_model.clone();
-            let unknown_apps = app.wizard.unknown_apps.clone();
             let apps = app.wizard.apps.clone();
             let tx = app.bg_tx.clone();
             let ctx_clone = ctx.clone();
@@ -773,10 +781,9 @@ fn draw_step_ai(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             app.wizard.ai_loading = true;
 
             std::thread::spawn(move || {
-                // Build (package, permissions, installer) tuples for unknown apps
+                // Envoyer TOUTES les apps a l'IA, pas juste les inconnues
                 let app_data: Vec<(String, Vec<String>, String)> = apps
                     .iter()
-                    .filter(|a| unknown_apps.contains(&a.package))
                     .map(|a| {
                         (
                             a.package.clone(),
@@ -786,8 +793,11 @@ fn draw_step_ai(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     })
                     .collect();
 
-                match crate::llm::analyze_apps(&api_key, &model, &app_data) {
+                let _ = tx.send(BgEvent::Log(format!("IA: analyse de {} apps...", app_data.len())));
+
+                match crate::llm::analyze_all_apps(&api_key, &model, &app_data) {
                     Ok(verdicts) => {
+                        let _ = tx.send(BgEvent::Log(format!("IA: {} problemes detectes", verdicts.len())));
                         let _ = tx.send(BgEvent::LlmAppVerdicts { verdicts });
                     }
                     Err(e) => {
@@ -871,21 +881,44 @@ fn draw_step_ai(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         ))
         .clicked()
     {
-        // Add bloatware verdicts as clean actions
+        // Add bloatware verdicts as clean actions + update brands DB
+        let brand = app.wizard.device_info.as_ref().map(|i| i.brand.clone()).unwrap_or_default();
+        let mut new_entries = 0;
         for (_, verdict) in &app.wizard.ai_verdicts {
             let v_lower = verdict.verdict.to_lowercase();
-            if v_lower.contains("bloatware") || v_lower.contains("danger") || v_lower.contains("malware") {
+            if v_lower.contains("bloatware") || v_lower.contains("tracker") || v_lower.contains("suspect") {
+                // Ajouter aux actions de nettoyage
                 let already_exists = app.wizard.clean_actions.iter().any(|a| a.package == verdict.package);
                 if !already_exists {
                     app.wizard.clean_actions.push(CleanAction {
                         package: verdict.package.clone(),
                         action: "uninstall".into(),
-                        description: verdict.explanation.clone(),
-                        selected: true,
+                        description: format!("[IA] {}", verdict.explanation),
+                        selected: v_lower.contains("bloatware") || v_lower.contains("tracker"),
                         from_ai: true,
                     });
                 }
+                // Mettre a jour la brands DB pour les prochains scans
+                if !brand.is_empty() {
+                    let profile = match verdict.profile.as_str() {
+                        "minimal" => crate::brands::types::CleanProfile::Minimal,
+                        "aggressive" => crate::brands::types::CleanProfile::Aggressive,
+                        _ => crate::brands::types::CleanProfile::Moderate,
+                    };
+                    let entry = crate::brands::types::BloatwareEntry {
+                        package: verdict.package.clone(),
+                        category: verdict.category.clone(),
+                        profile,
+                        description: verdict.explanation.clone(),
+                    };
+                    if crate::brands::add_entry(&brand, entry) {
+                        new_entries += 1;
+                    }
+                }
             }
+        }
+        if new_entries > 0 {
+            app.log(&format!("IA: {} nouveaux bloatwares ajoutes a la base {}", new_entries, brand));
         }
         app.wizard.step = WizardStep::Cleaning;
     }
