@@ -37,10 +37,31 @@ pub fn call_openrouter(api_key: &str, model: &str, prompt: &str) -> Result<Strin
     let json: serde_json::Value = serde_json::from_str(&body_text)
         .map_err(|e| format!("Erreur parsing JSON: {} — reponse brute: {}", e, &body_text[..300.min(body_text.len())]))?;
 
-    json["choices"][0]["message"]["content"]
-        .as_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| format!("Reponse inattendue du LLM: {}", &body_text[..300.min(body_text.len())]))
+    let message = &json["choices"][0]["message"];
+
+    // Essayer content d'abord, puis reasoning (modeles de raisonnement)
+    if let Some(content) = message["content"].as_str() {
+        if !content.is_empty() {
+            return Ok(content.to_string());
+        }
+    }
+    // Certains modeles mettent la reponse dans reasoning
+    if let Some(reasoning) = message["reasoning"].as_str() {
+        if !reasoning.is_empty() {
+            return Ok(reasoning.to_string());
+        }
+    }
+    // Ou dans reasoning_details[].text
+    if let Some(details) = message["reasoning_details"].as_array() {
+        let texts: Vec<&str> = details.iter()
+            .filter_map(|d| d["text"].as_str())
+            .collect();
+        if !texts.is_empty() {
+            return Ok(texts.join(""));
+        }
+    }
+
+    Err(format!("Reponse vide du LLM — reponse brute: {}", &body_text[..500.min(body_text.len())]))
 }
 
 pub fn analyze_apps(api_key: &str, model: &str, apps: &[(String, Vec<String>, String)]) -> Result<Vec<AppVerdict>, String> {
