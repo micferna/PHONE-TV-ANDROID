@@ -423,7 +423,7 @@ pub fn draw_security(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
             ui.collapsing("Configuration IA", |ui| {
                 ui.label("Cle API OpenRouter:");
                 ui.add(egui::TextEdit::singleline(&mut app.settings.openrouter_api_key).password(true));
-                ui.label("Modele LLM:");
+                ui.label("Modele LLM (choisir ou taper manuellement):");
                 let models = [
                     "anthropic/claude-sonnet-4",
                     "anthropic/claude-haiku-4",
@@ -437,14 +437,17 @@ pub fn draw_security(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
                     "qwen/qwen3-235b-a22b",
                     "mistralai/mistral-medium",
                 ];
-                egui::ComboBox::from_id_salt("llm_model_selector")
-                    .selected_text(&app.settings.llm_model)
-                    .width(300.0)
-                    .show_ui(ui, |ui| {
-                        for model in &models {
-                            ui.selectable_value(&mut app.settings.llm_model, model.to_string(), *model);
+                ui.add(egui::TextEdit::singleline(&mut app.settings.llm_model)
+                    .desired_width(350.0)
+                    .hint_text("ex: anthropic/claude-sonnet-4"));
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    for model in &models {
+                        if ui.selectable_label(app.settings.llm_model == *model, *model).clicked() {
+                            app.settings.llm_model = model.to_string();
                         }
-                    });
+                    }
+                });
                 if ui.button("Sauvegarder").clicked() {
                     app.save_settings();
                 }
