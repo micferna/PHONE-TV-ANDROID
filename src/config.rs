@@ -8,6 +8,14 @@ pub struct Settings {
     pub dark_mode: bool,
     pub replay_ratio: f32,
     pub window_size: (f32, f32),
+    #[serde(default)]
+    pub openrouter_api_key: String,
+    #[serde(default = "default_llm_model")]
+    pub llm_model: String,
+}
+
+fn default_llm_model() -> String {
+    "anthropic/claude-sonnet-4".to_string()
 }
 
 impl Default for Settings {
@@ -15,12 +23,14 @@ impl Default for Settings {
         Self {
             dark_mode: true,
             replay_ratio: 12.0,
-            window_size: (900.0, 750.0),
+            window_size: (1000.0, 800.0),
+            openrouter_api_key: String::new(),
+            llm_model: default_llm_model(),
         }
     }
 }
 
-fn config_dir() -> PathBuf {
+pub fn config_dir() -> PathBuf {
     let dir = dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("phone-tv");
@@ -112,4 +122,21 @@ pub fn save_channels(channels: &[TvChannel]) {
             let _ = writeln!(file, "{}:{}", ch.number, ch.name);
         }
     }
+}
+
+pub fn blacklist_path() -> PathBuf {
+    config_dir().join("blacklist.txt")
+}
+
+pub fn load_blacklist() -> Vec<String> {
+    std::fs::read_to_string(blacklist_path())
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+pub fn save_blacklist(blacklist: &[String]) {
+    let _ = std::fs::write(blacklist_path(), blacklist.join("\n"));
 }

@@ -1,6 +1,6 @@
 [package]
 name = "phone-tv"
-version = "4.0.0"
+version = "5.0.0"
 edition = "2021"
 description = "Contrôle Android Phone & TV via ADB"
 authors = ["OCB"]
@@ -14,3 +14,6 @@ anyhow = "1.0"
 rfd = "0.17"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+chrono = "0.4"
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking", "gzip", "brotli", "deflate"] }
+serde_json = "1"

@@ -17,7 +17,7 @@ pub fn draw_sidebar(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context
                     .color(theme::accent_color()),
             );
             ui.label(
-                egui::RichText::new("v4.0.0")
+                egui::RichText::new("v5.0.0")
                     .size(11.0)
                     .color(egui::Color32::GRAY),
             );
@@ -64,9 +64,20 @@ pub fn draw_sidebar(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context
                             DeviceType::Tv => "📺",
                             DeviceType::Unknown => "❓",
                         };
-                        let label = format!("{} {}", icon, device.name);
+                        let status_dot_color = if device.status == "device" {
+                            theme::success_color()
+                        } else {
+                            theme::danger_color()
+                        };
+                        let status_dot = egui::RichText::new("●").color(status_dot_color).size(10.0);
+                        let label_text = format!("{} {}", icon, device.name);
                         let selected = app.selected_device == Some(i);
-                        if ui.selectable_label(selected, &label).clicked() {
+                        let response = ui.horizontal(|ui| {
+                            let clicked = ui.selectable_label(selected, &label_text).clicked();
+                            ui.label(status_dot);
+                            clicked
+                        });
+                        if response.inner {
                             app.selected_device = Some(i);
                             // Auto-switch tab
                             match device.device_type {
@@ -85,10 +96,12 @@ pub fn draw_sidebar(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context
 
         // Navigation tabs
         let tabs = [
-            (Tab::Devices, "📱  Appareils"),
+            (Tab::Devices, "📡  Appareils"),
+            (Tab::Phone, "📱  Phone"),
             (Tab::Tv, "📺  TV"),
-            (Tab::Phone, "📷  Phone"),
             (Tab::Video, "🎬  Vidéo"),
+            (Tab::Security, "🛡  Sécurité"),
+            (Tab::Audit, "🧹  Audit & Nettoyage"),
         ];
 
         for (tab, label) in tabs {
@@ -115,6 +128,21 @@ pub fn draw_sidebar(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context
             };
 
             let response = ui.add_enabled(enabled, btn);
+
+            // Draw accent bar on the left for selected tab
+            if selected {
+                let rect = response.rect;
+                let accent_rect = egui::Rect::from_min_size(
+                    rect.left_top(),
+                    egui::vec2(3.0, rect.height()),
+                );
+                ui.painter().rect_filled(
+                    accent_rect,
+                    egui::CornerRadius::same(1),
+                    theme::accent_color(),
+                );
+            }
+
             if response.clicked() {
                 app.active_tab = tab;
             }

@@ -1,5 +1,12 @@
 use std::process::{Child, ChildStdin};
 
+use crate::brands::types::BrandDb;
+use crate::history::types::DeviceHistory;
+use crate::llm::types::AppVerdict;
+use crate::pentest::rootcheck::RootStatus;
+use crate::pentest::vulns::Vulnerability;
+use crate::wizard::types::DeviceInfo;
+
 #[derive(Clone, Default)]
 pub struct TransferState {
     pub active: bool,
@@ -21,6 +28,36 @@ pub enum BgEvent {
     PhoneApps { device_id: String, apps: Vec<String> },
     ScreenshotReady { device_id: String, data: Vec<u8> },
     Log(String),
+    SecurityScore { score: u8, issues: Vec<SecurityIssue> },
+    SecurityAppsList { packages: Vec<String> },
+    SecurityAppDetail { package: String, info: AppInfo },
+    SecurityProcesses { processes: Vec<ProcessInfo> },
+    SecurityDataUsage { usage: Vec<DataUsage> },
+    SecurityWakelocks { wakelocks: Vec<WakelockInfo> },
+    SecurityPosture { checks: Vec<DevicePosture> },
+    SecurityPermissions { package: String, permissions: Vec<PermissionInfo> },
+    BlacklistAlert { found: Vec<String> },
+    AppActionResult { package: String, action: String, success: bool, message: String },
+    SecurityAppsLoadingDone,
+    // Wizard events
+    WizardDeviceDetected { info: DeviceInfo },
+    WizardScanProgress { current: usize, total: usize, package: String },
+    WizardScanComplete { apps: Vec<AppInfo>, posture: Vec<DevicePosture>, score: u8, issues: Vec<SecurityIssue> },
+    WizardPentestComplete { vulns: Vec<Vulnerability>, root: RootStatus, risk_score: u8 },
+    WizardCleanProgress { package: String, action: String, success: bool, message: String },
+    WizardCleanComplete,
+    // Model validation
+    LlmModelValid { valid: bool, model: String, error: Option<String> },
+    // LLM events
+    LlmAppVerdicts { verdicts: Vec<AppVerdict> },
+    LlmPentestReport { vulns: Vec<Vulnerability> },
+    LlmError { message: String },
+    // Rootability
+    WizardRootabilityResult { rootable: bool, method: Option<String>, confidence: String, details: String },
+    // Brands events
+    BrandsLoaded { db: BrandDb },
+    // History events
+    HistoryLoaded { history: Option<DeviceHistory> },
 }
 
 #[derive(Clone, PartialEq)]
@@ -36,6 +73,8 @@ pub enum Tab {
     Tv,
     Phone,
     Video,
+    Security,
+    Audit,
 }
 
 #[derive(Clone)]
@@ -56,4 +95,139 @@ pub struct TvShell {
     pub device_id: String,
     pub child: Child,
     pub stdin: ChildStdin,
+}
+
+// ── Security types ──────────────────────────────────────────────────
+
+#[derive(Clone, Debug, Default)]
+pub struct AppInfo {
+    pub package: String,
+    pub version_name: String,
+    pub version_code: u32,
+    pub first_install: String,
+    pub last_update: String,
+    pub installer: AppInstaller,
+    pub target_sdk: u32,
+    pub enabled: bool,
+    pub details_loaded: bool,
+    pub dangerous_perm_count: u32,
+    pub dangerous_perm_names: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum AppInstaller {
+    PlayStore,
+    Sideload,
+    Adb,
+    #[default]
+    Unknown,
+}
+
+#[derive(Clone, Debug)]
+pub struct PermissionInfo {
+    pub name: String,
+    pub granted: bool,
+    pub last_used: Option<String>,
+    pub dangerous: bool,
+    pub is_runtime: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct SecurityIssue {
+    pub id: String,
+    pub description: String,
+    pub severity: Severity,
+    pub points: i32,
+    #[allow(dead_code)]
+    pub fixable: bool,
+    pub fix_command: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Severity {
+    Critical,
+    Warning,
+    Info,
+}
+
+#[derive(Clone, Debug)]
+pub struct ProcessInfo {
+    pub package: String,
+    pub pid: u32,
+    pub memory_kb: u64,
+    pub adj: i32,
+    pub state: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct DataUsage {
+    pub package: String,
+    #[allow(dead_code)]
+    pub uid: u32,
+    pub wifi_rx: u64,
+    pub wifi_tx: u64,
+    pub mobile_rx: u64,
+    pub mobile_tx: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct WakelockInfo {
+    pub package: String,
+    pub duration_ms: u64,
+    pub duration_human: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct DevicePosture {
+    pub name: String,
+    pub value: String,
+    pub status: PostureStatus,
+    pub fix_command: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PostureStatus {
+    Good,
+    Warning,
+    Bad,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum SecurityView {
+    Score,
+    Apps,
+    Permissions,
+    Blacklist,
+    Monitoring,
+    Posture,
+    Cleaning,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum PermissionView {
+    ByPermission,
+    ByApp,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum MonitoringView {
+    Processes,
+    DataUsage,
+    Wakelocks,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum AppFilter {
+    All,
+    ThirdParty,
+    System,
+    Disabled,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum AppSort {
+    Danger,
+    Name,
+    InstallDate,
+    Source,
 }

@@ -1,7 +1,9 @@
 use eframe::egui;
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
@@ -10,6 +12,7 @@ use crate::config::{self, Settings};
 use crate::theme;
 use crate::types::*;
 use crate::ui;
+use crate::wizard::types::WizardState;
 
 pub struct PhoneTvApp {
     pub devices: Vec<Device>,
@@ -67,6 +70,40 @@ pub struct PhoneTvApp {
     // Phone apps (NEW)
     pub phone_apps: Vec<String>,
     pub phone_apps_loading: bool,
+    // Security
+    pub security_view: SecurityView,
+    pub security_score: Option<(u8, Vec<SecurityIssue>)>,
+    pub security_score_loading: bool,
+    pub security_apps: Vec<AppInfo>,
+    pub security_apps_filter: AppFilter,
+    pub security_apps_sort: AppSort,
+    pub security_apps_search: String,
+    pub security_apps_loading: bool,
+    pub security_loading_cancel: Arc<AtomicBool>,
+    pub security_permission_view: PermissionView,
+    pub security_permission_cache: HashMap<String, Vec<PermissionInfo>>,
+    pub security_selected_app: Option<String>,
+    pub security_monitoring_view: MonitoringView,
+    pub security_processes: Vec<ProcessInfo>,
+    pub security_processes_loading: bool,
+    pub security_processes_auto_refresh: bool,
+    pub security_processes_last_refresh: f64,
+    pub security_data_usage: Vec<DataUsage>,
+    pub security_data_usage_loading: bool,
+    pub security_wakelocks: Vec<WakelockInfo>,
+    pub security_wakelocks_loading: bool,
+    pub security_posture: Vec<DevicePosture>,
+    pub security_posture_loading: bool,
+    pub security_permissions_loading: bool,
+    pub blacklist: Vec<String>,
+    pub blacklist_alerts: Vec<String>,
+    pub blacklist_new_entry: String,
+    pub confirm_clear_data: Option<String>,
+    pub confirm_uninstall: Option<String>,
+    pub security_apps_loaded_count: usize,
+    pub security_auto_loaded_device: Option<String>,
+    pub wizard: WizardState,
+    pub llm_model_status: Option<(bool, String)>,
 }
 
 impl PhoneTvApp {
@@ -116,12 +153,47 @@ impl PhoneTvApp {
             phone_battery: None,
             phone_apps: Vec::new(),
             phone_apps_loading: false,
+            // Security
+            security_view: SecurityView::Score,
+            security_score: None,
+            security_score_loading: false,
+            security_apps: Vec::new(),
+            security_apps_filter: AppFilter::ThirdParty,
+            security_apps_sort: AppSort::Danger,
+            security_apps_search: String::new(),
+            security_apps_loading: false,
+            security_loading_cancel: Arc::new(AtomicBool::new(false)),
+            security_permission_view: PermissionView::ByPermission,
+            security_permission_cache: HashMap::new(),
+            security_selected_app: None,
+            security_monitoring_view: MonitoringView::Processes,
+            security_processes: Vec::new(),
+            security_processes_loading: false,
+            security_processes_auto_refresh: false,
+            security_processes_last_refresh: 0.0,
+            security_data_usage: Vec::new(),
+            security_data_usage_loading: false,
+            security_wakelocks: Vec::new(),
+            security_wakelocks_loading: false,
+            security_posture: Vec::new(),
+            security_posture_loading: false,
+            security_permissions_loading: false,
+            blacklist: config::load_blacklist(),
+            blacklist_alerts: Vec::new(),
+            blacklist_new_entry: String::new(),
+            confirm_clear_data: None,
+            confirm_uninstall: None,
+            security_apps_loaded_count: 0,
+            security_auto_loaded_device: None,
+            wizard: WizardState::default(),
+            llm_model_status: None,
         }
     }
 
     pub fn log(&mut self, msg: &str) {
-        self.logs.push_back(msg.to_string());
-        if self.logs.len() > 15 {
+        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+        self.logs.push_back(format!("[{}] {}", now, msg));
+        if self.logs.len() > 50 {
             self.logs.pop_front();
         }
     }
@@ -139,6 +211,8 @@ impl PhoneTvApp {
             dark_mode: self.dark_mode,
             replay_ratio: self.settings.replay_ratio,
             window_size: self.settings.window_size,
+            openrouter_api_key: self.settings.openrouter_api_key.clone(),
+            llm_model: self.settings.llm_model.clone(),
         };
         config::save_settings(&s);
     }
@@ -155,6 +229,8 @@ impl PhoneTvApp {
                 .map(|d| d.device_type == DeviceType::Phone)
                 .unwrap_or(false),
             Tab::Video => self.get_selected_id().is_some(),
+            Tab::Security => self.get_selected_id().is_some(),
+            Tab::Audit => self.get_selected_id().is_some(),
         }
     }
 
@@ -581,6 +657,142 @@ impl PhoneTvApp {
                 BgEvent::Log(msg) => {
                     self.log(&msg);
                 }
+                BgEvent::SecurityScore { score, issues } => {
+                    self.security_score = Some((score, issues));
+                    self.security_score_loading = false;
+                }
+                BgEvent::SecurityAppsList { packages } => {
+                    self.security_apps_loaded_count = 0;
+                    self.security_apps = packages
+                        .into_iter()
+                        .map(|p| AppInfo { package: p, ..Default::default() })
+                        .collect();
+                }
+                BgEvent::SecurityAppDetail { package, info } => {
+                    if let Some(app) = self.security_apps.iter_mut().find(|a| a.package == package) {
+                        *app = info;
+                    }
+                    self.security_apps_loaded_count += 1;
+                }
+                BgEvent::SecurityProcesses { processes } => {
+                    self.security_processes = processes;
+                    self.security_processes_loading = false;
+                }
+                BgEvent::SecurityDataUsage { usage } => {
+                    self.security_data_usage = usage;
+                    self.security_data_usage_loading = false;
+                }
+                BgEvent::SecurityWakelocks { wakelocks } => {
+                    self.security_wakelocks = wakelocks;
+                    self.security_wakelocks_loading = false;
+                }
+                BgEvent::SecurityPosture { checks } => {
+                    self.security_posture = checks;
+                    self.security_posture_loading = false;
+                }
+                BgEvent::SecurityPermissions { package, permissions } => {
+                    self.security_permission_cache.insert(package, permissions);
+                    // Clear loading when we have permissions for all known apps
+                    if !self.security_apps.is_empty() && self.security_permission_cache.len() >= self.security_apps.len() {
+                        self.security_permissions_loading = false;
+                    }
+                }
+                BgEvent::BlacklistAlert { found } => {
+                    self.blacklist_alerts = found;
+                }
+                BgEvent::AppActionResult { package, action, success, message } => {
+                    let status = if success { "✓" } else { "✗" };
+                    self.log(&format!("{} {} {} : {}", status, action, package, message));
+                    if success {
+                        match action.as_str() {
+                            "uninstall" => {
+                                self.security_apps.retain(|a| a.package != package);
+                                // Force score refresh
+                                self.security_score = None;
+                                self.security_score_loading = false;
+                            }
+                            "disable" => {
+                                if let Some(a) = self.security_apps.iter_mut().find(|a| a.package == package) {
+                                    a.enabled = false;
+                                }
+                            }
+                            "enable" => {
+                                if let Some(a) = self.security_apps.iter_mut().find(|a| a.package == package) {
+                                    a.enabled = true;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                BgEvent::SecurityAppsLoadingDone => {
+                    self.security_apps_loading = false;
+                }
+                BgEvent::WizardScanProgress { current, total, package } => {
+                    self.wizard.scan_progress = current as f32 / total as f32;
+                    self.wizard.scan_current = current;
+                    self.wizard.scan_total = total;
+                    self.wizard.scan_current_package = package;
+                }
+                BgEvent::LlmModelValid { valid, model, error } => {
+                    self.llm_model_status = Some((valid, error.unwrap_or_else(|| format!("{} OK", model))));
+                }
+                BgEvent::WizardDeviceDetected { info } => {
+                    self.wizard.device_info = Some(info);
+                    // Reste sur Detection — l'utilisateur clique "Lancer le scan" pour avancer
+                }
+                BgEvent::WizardScanComplete { apps, posture, score, issues } => {
+                    self.wizard.score_before = Some((score, issues));
+                    self.wizard.apps = apps;
+                    self.wizard.posture = posture;
+                    self.wizard.scan_loading = false;
+                    self.wizard.step = crate::wizard::types::WizardStep::Pentest;
+                }
+                BgEvent::WizardPentestComplete { vulns, root, risk_score } => {
+                    self.wizard.vulns = vulns;
+                    self.wizard.root_status = Some(root);
+                    self.wizard.risk_score = Some(risk_score);
+                    self.wizard.pentest_loading = false;
+                    self.wizard.step = crate::wizard::types::WizardStep::ProfileSelection;
+                }
+                BgEvent::WizardCleanProgress { package, action, success, message } => {
+                    self.wizard.clean_results.push(crate::wizard::types::CleanResult {
+                        package,
+                        action,
+                        success,
+                        message,
+                    });
+                    self.wizard.clean_progress += 1;
+                }
+                BgEvent::WizardCleanComplete => {
+                    self.wizard.cleaning = false;
+                    self.wizard.step = crate::wizard::types::WizardStep::Report;
+                }
+                BgEvent::LlmAppVerdicts { verdicts } => {
+                    self.wizard.ai_verdicts = verdicts.into_iter().map(|v| (v.package.clone(), v)).collect();
+                    self.wizard.ai_loading = false;
+                }
+                BgEvent::LlmPentestReport { vulns } => {
+                    self.wizard.vulns.extend(vulns);
+                }
+                BgEvent::LlmError { message } => {
+                    self.wizard.ai_loading = false;
+                    self.log(&format!("Erreur LLM: {}", message));
+                }
+                BgEvent::BrandsLoaded { db } => {
+                    self.wizard.brand_db = Some(db);
+                }
+                BgEvent::HistoryLoaded { history } => {
+                    self.wizard.history = history;
+                }
+                BgEvent::WizardRootabilityResult { rootable, method, confidence, details } => {
+                    if let Some(ref mut root) = self.wizard.root_status {
+                        root.rootable = Some(rootable);
+                        root.root_method = method;
+                    }
+                    self.log(&format!("Rootabilite: {} (confiance: {}) — {}",
+                        if rootable { "OUI" } else { "NON" }, confidence, details));
+                }
             }
         }
     }
@@ -630,37 +842,75 @@ impl eframe::App for PhoneTvApp {
                 ui::draw_sidebar(self, ui, ctx);
             });
 
-        // Bottom panel: logs
-        egui::TopBottomPanel::bottom("footer").show(ctx, |ui| {
-            ui.add_space(4.0);
+        // Bottom panel: logs (resizable)
+        egui::TopBottomPanel::bottom("footer")
+            .resizable(true)
+            .default_height(160.0)
+            .min_height(36.0)
+            .max_height(400.0)
+            .frame(
+                egui::Frame::NONE
+                    .inner_margin(8.0)
+                    .fill(theme::sidebar_fill(self.dark_mode))
+                    .stroke(egui::Stroke::new(1.0, theme::card_border(self.dark_mode))),
+            )
+            .show(ctx, |ui| {
+                let log_count = self.logs.len();
+                ui.horizontal(|ui| {
+                    let arrow = if self.logs_collapsed { "▶" } else { "▼" };
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(format!("{} Logs ({})", arrow, log_count))
+                                    .size(13.0)
+                                    .strong(),
+                            )
+                            .fill(egui::Color32::TRANSPARENT),
+                        )
+                        .clicked()
+                    {
+                        self.logs_collapsed = !self.logs_collapsed;
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("Effacer")
+                                    .size(11.0)
+                                    .color(theme::text_secondary(self.dark_mode)),
+                            )
+                            .fill(egui::Color32::TRANSPARENT),
+                        )
+                        .clicked()
+                    {
+                        self.logs.clear();
+                    }
+                });
 
-            let log_count = self.logs.len();
-            ui.horizontal(|ui| {
-                let arrow = if self.logs_collapsed { "▶" } else { "▼" };
-                if ui
-                    .button(format!("{} Logs ({})", arrow, log_count))
-                    .clicked()
-                {
-                    self.logs_collapsed = !self.logs_collapsed;
-                }
-                if ui.small_button("Clear").clicked() {
-                    self.logs.clear();
+                if !self.logs_collapsed {
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical()
+                        .show(ui, |ui| {
+                            for log in &self.logs {
+                                // Color based on content
+                                let color = if log.contains("✓") {
+                                    theme::success_color()
+                                } else if log.contains("✗") || log.contains("Échec") || log.contains("Erreur") {
+                                    theme::danger_color()
+                                } else if log.contains("⚠") || log.contains("ATTENTION") {
+                                    theme::warning_color()
+                                } else {
+                                    theme::text_primary(self.dark_mode)
+                                };
+                                ui.label(
+                                    egui::RichText::new(log)
+                                        .size(12.0)
+                                        .family(egui::FontFamily::Monospace)
+                                        .color(color),
+                                );
+                            }
+                        });
                 }
             });
-
-            if !self.logs_collapsed {
-                egui::ScrollArea::vertical()
-                    .max_height(60.0)
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        for log in &self.logs {
-                            ui.label(egui::RichText::new(log).small());
-                        }
-                    });
-            }
-
-            ui.add_space(4.0);
-        });
 
         // Central panel: tab content
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -670,8 +920,13 @@ impl eframe::App for PhoneTvApp {
                     Tab::Tv => ui::draw_tv(self, ui, ctx),
                     Tab::Phone => ui::draw_phone(self, ui, ctx),
                     Tab::Video => ui::draw_video(self, ui, ctx),
+                    Tab::Security => ui::draw_security(self, ui, ctx),
+                    Tab::Audit => ui::draw_audit(self, ui, ctx),
                 }
             });
         });
+
+        // Wizard overlay
+        ui::draw_wizard(self, ctx);
     }
 }

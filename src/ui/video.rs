@@ -14,6 +14,7 @@ pub fn draw_video(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
         .corner_radius(8.0)
         .inner_margin(12.0)
         .fill(theme::card_bg(app.dark_mode))
+        .stroke(egui::Stroke::new(0.5, theme::card_border(app.dark_mode)))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(egui::RichText::new("🔗 Lire une URL").strong().size(14.0));
@@ -45,6 +46,7 @@ pub fn draw_video(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
         .corner_radius(8.0)
         .inner_margin(12.0)
         .fill(theme::card_bg(app.dark_mode))
+        .stroke(egui::Stroke::new(0.5, theme::card_border(app.dark_mode)))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(egui::RichText::new("📤 Transfert fichier").strong().size(14.0));
@@ -79,6 +81,21 @@ pub fn draw_video(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                     }
                 }
             });
+
+            // Drop zone when no file selected and not transferring
+            let transfer_preview = app.transfer.lock().unwrap().clone();
+            if app.file_path.is_empty() && !transfer_preview.active {
+                ui.add_space(8.0);
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 80.0), egui::Sense::hover());
+                ui.painter().rect_stroke(rect, 8.0, egui::Stroke::new(2.0, theme::text_dim(app.dark_mode)), egui::StrokeKind::Outside);
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "📂 Glissez un fichier ici",
+                    egui::FontId::proportional(14.0),
+                    theme::text_secondary(app.dark_mode),
+                );
+            }
 
             ui.add_space(6.0);
 

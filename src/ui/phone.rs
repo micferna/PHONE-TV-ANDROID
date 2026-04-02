@@ -8,9 +8,10 @@ use crate::types::BgEvent;
 
 fn section(ui: &mut egui::Ui, dark_mode: bool, add_contents: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::NONE
-        .corner_radius(10.0)
-        .inner_margin(14.0)
+        .corner_radius(8.0)
+        .inner_margin(12.0)
         .fill(theme::card_bg(dark_mode))
+        .stroke(egui::Stroke::new(0.5, theme::card_border(dark_mode)))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add_contents(ui);
@@ -97,7 +98,11 @@ pub fn draw_phone(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
 
                 if app.webcam_active {
                     ui.add_space(2.0);
-                    ui.label(egui::RichText::new("● LIVE").color(egui::Color32::RED).strong());
+                    let t = ui.ctx().input(|i| i.time);
+                    let alpha = ((t * 3.0).sin() * 0.5 + 0.5) * 255.0;
+                    let live_color = egui::Color32::from_rgba_unmultiplied(248, 81, 73, alpha as u8);
+                    ui.label(egui::RichText::new("● LIVE").color(live_color).strong());
+                    ui.ctx().request_repaint();
                 }
 
                 if !Path::new("/dev/video10").exists() {
@@ -156,17 +161,21 @@ pub fn draw_phone(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
 
     // ======== Actions rapides + Batterie côte à côte ========
     ui.columns(2, |cols| {
-        // LEFT: Actions rapides
+        // LEFT: Actions rapides — dashboard tiles
         section(&mut cols[0], app.dark_mode, |ui| {
             section_title(ui, "⚡ Actions rapides");
             if let Some(ref id) = app.get_selected_id() {
-                egui::Grid::new("phone_actions").spacing([4.0, 4.0]).show(ui, |ui| {
+                let tile_size = egui::vec2(90.0, 70.0);
+                let dark = app.dark_mode;
+                egui::Grid::new("phone_actions").spacing([6.0, 6.0]).show(ui, |ui| {
                     for (label, action) in [
-                        ("📸 Photo", "camera"),
-                        ("🎥 Vidéo", "video"),
-                        ("🎙 Micro", "mic"),
+                        ("📸\nPhoto", "camera"),
+                        ("🎥\nVidéo", "video"),
+                        ("🎙\nMicro", "mic"),
                     ] {
-                        if ui.add_sized([90.0, 36.0], egui::Button::new(label).corner_radius(8.0)).clicked() {
+                        if ui.add_sized(tile_size, egui::Button::new(
+                            egui::RichText::new(label).size(16.0).strong()
+                        ).corner_radius(8.0).fill(theme::widget_bg(dark))).clicked() {
                             match action {
                                 "camera" => adb::open_camera(id),
                                 "video" => adb::open_video(id),
@@ -176,11 +185,13 @@ pub fn draw_phone(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                     }
                     ui.end_row();
                     for (label, key) in [
-                        ("🏠 Home", "KEYCODE_HOME"),
-                        ("⬅ Back", "KEYCODE_BACK"),
-                        ("📱 Recent", "KEYCODE_APP_SWITCH"),
+                        ("🏠\nHome", "KEYCODE_HOME"),
+                        ("⬅\nBack", "KEYCODE_BACK"),
+                        ("📱\nRecent", "KEYCODE_APP_SWITCH"),
                     ] {
-                        if ui.add_sized([90.0, 36.0], egui::Button::new(label).corner_radius(8.0)).clicked() {
+                        if ui.add_sized(tile_size, egui::Button::new(
+                            egui::RichText::new(label).size(16.0).strong()
+                        ).corner_radius(8.0).fill(theme::widget_bg(dark))).clicked() {
                             adb::press_key(id, key);
                         }
                     }
@@ -231,95 +242,32 @@ pub fn draw_phone(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
         });
     });
 
-    // ======== Sonnerie + Apps côte à côte ========
-    ui.columns(2, |cols| {
-        // LEFT: Sonnerie
-        section(&mut cols[0], app.dark_mode, |ui| {
-            section_title(ui, "🔔 Retrouver mon tel");
-            ui.label(egui::RichText::new("Fait sonner le téléphone au volume max").size(11.0).color(egui::Color32::GRAY));
-            ui.add_space(6.0);
-            if ui.add(
-                egui::Button::new(egui::RichText::new("🔊 Faire sonner").size(14.0).color(egui::Color32::WHITE))
-                    .fill(theme::warning_color())
-                    .corner_radius(8.0)
-                    .min_size(egui::vec2(ui.available_width(), 38.0)),
-            ).clicked() {
-                if let Some(ref id) = app.get_selected_id() {
-                    adb::ring_phone(id);
-                    app.log("Sonnerie activée");
-                }
+    // ======== Sonnerie (full width) ========
+    section(ui, app.dark_mode, |ui| {
+        section_title(ui, "🔔 Retrouver mon tel");
+        ui.label(egui::RichText::new("Fait sonner le téléphone au volume max").size(11.0).color(egui::Color32::GRAY));
+        ui.add_space(6.0);
+        if ui.add(
+            egui::Button::new(egui::RichText::new("🔊 Faire sonner").size(14.0).color(egui::Color32::WHITE))
+                .fill(theme::warning_color())
+                .corner_radius(8.0)
+                .min_size(egui::vec2(ui.available_width(), 38.0)),
+        ).clicked() {
+            if let Some(ref id) = app.get_selected_id() {
+                adb::ring_phone(id);
+                app.log("Sonnerie activée");
             }
-            ui.add_space(4.0);
-            if ui.add(
-                egui::Button::new(egui::RichText::new("🔇 Arrêter").size(13.0))
-                    .corner_radius(8.0)
-                    .min_size(egui::vec2(ui.available_width(), 32.0)),
-            ).clicked() {
-                if let Some(ref id) = app.get_selected_id() {
-                    adb::stop_ring(id);
-                    app.log("Sonnerie arrêtée");
-                }
+        }
+        ui.add_space(4.0);
+        if ui.add(
+            egui::Button::new(egui::RichText::new("🔇 Arrêter").size(13.0))
+                .corner_radius(8.0)
+                .min_size(egui::vec2(ui.available_width(), 32.0)),
+        ).clicked() {
+            if let Some(ref id) = app.get_selected_id() {
+                adb::stop_ring(id);
+                app.log("Sonnerie arrêtée");
             }
-        });
-
-        // RIGHT: Apps
-        section(&mut cols[1], app.dark_mode, |ui| {
-            ui.horizontal(|ui| {
-                section_title(ui, "📦 Apps tierces");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let loading = app.phone_apps_loading;
-                    let btn_text = if loading { "⏳" } else { "🔄 Charger" };
-                    if ui.add_enabled(!loading, egui::Button::new(btn_text).corner_radius(6.0)).clicked() {
-                        app.phone_apps_loading = true;
-                        if let Some(ref id) = app.get_selected_id() {
-                            let id = id.clone();
-                            let tx = app.bg_tx.clone();
-                            std::thread::spawn(move || {
-                                let apps = adb::get_third_party_apps(&id);
-                                let _ = tx.send(BgEvent::PhoneApps { device_id: id, apps });
-                            });
-                        }
-                    }
-                });
-            });
-
-            if !app.phone_apps.is_empty() {
-                ui.label(egui::RichText::new(format!("{} apps", app.phone_apps.len())).size(11.0).color(egui::Color32::GRAY));
-                ui.add_space(2.0);
-                egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
-                    let mut to_uninstall: Option<String> = None;
-                    for pkg in &app.phone_apps {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(pkg).size(11.0));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.small_button(egui::RichText::new("🗑").color(theme::danger_color())).clicked() {
-                                    to_uninstall = Some(pkg.clone());
-                                }
-                            });
-                        });
-                    }
-                    if let Some(pkg) = to_uninstall {
-                        if let Some(ref id) = app.get_selected_id() {
-                            let id = id.clone();
-                            let pkg_clone = pkg.clone();
-                            let tx = app.bg_tx.clone();
-                            std::thread::spawn(move || {
-                                let ok = adb::uninstall_app(&id, &pkg_clone);
-                                let msg = if ok { format!("{} désinstallé", pkg_clone) } else { format!("Échec {}", pkg_clone) };
-                                let _ = tx.send(BgEvent::Log(msg));
-                                let apps = adb::get_third_party_apps(&id);
-                                let _ = tx.send(BgEvent::PhoneApps { device_id: id, apps });
-                            });
-                        }
-                        app.log(&format!("Désinstallation {}...", pkg));
-                    }
-                });
-            } else {
-                ui.add_space(12.0);
-                ui.vertical_centered(|ui| {
-                    ui.label(egui::RichText::new("Appuyez 🔄 Charger").size(11.0).color(egui::Color32::GRAY));
-                });
-            }
-        });
+        }
     });
 }

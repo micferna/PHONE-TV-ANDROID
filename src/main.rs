@@ -1,9 +1,15 @@
 mod adb;
 mod app;
+mod brands;
 mod config;
+mod history;
+mod llm;
+mod pentest;
+mod security;
 mod theme;
 mod types;
 mod ui;
+mod wizard;
 
 use eframe::egui;
 

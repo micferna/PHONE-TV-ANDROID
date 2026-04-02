@@ -9,9 +9,10 @@ use crate::types::BgEvent;
 
 fn section(ui: &mut egui::Ui, dark_mode: bool, add_contents: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::NONE
-        .corner_radius(10.0)
-        .inner_margin(14.0)
+        .corner_radius(8.0)
+        .inner_margin(12.0)
         .fill(theme::card_bg(dark_mode))
+        .stroke(egui::Stroke::new(0.5, theme::card_border(dark_mode)))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add_contents(ui);
@@ -85,11 +86,7 @@ pub fn draw_tv(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         section_title(ui, "🎮 Télécommande");
 
         let dpad_size = egui::vec2(68.0, 44.0);
-        let dpad_fill = if app.dark_mode {
-            egui::Color32::from_rgb(45, 50, 80)
-        } else {
-            egui::Color32::from_rgb(215, 220, 238)
-        };
+        let dpad_fill = theme::widget_bg(app.dark_mode);
 
         // Use columns: D-pad on left, nav/media/volume on right
         ui.columns(2, |cols| {
@@ -164,7 +161,7 @@ pub fn draw_tv(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 .add_enabled(
                     !app.tv_text_input.is_empty(),
                     egui::Button::new(egui::RichText::new("Envoyer").color(egui::Color32::WHITE))
-                        .fill(theme::ACCENT)
+                        .fill(theme::accent_color())
                         .corner_radius(8.0)
                         .min_size(egui::vec2(ui.available_width(), 30.0)),
                 )
@@ -234,11 +231,7 @@ pub fn draw_tv(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         let mut channel_to_delete: Option<usize> = None;
         let cols = 4;
         let btn_size = egui::vec2(120.0, 30.0);
-        let ch_fill = if app.dark_mode {
-            egui::Color32::from_rgb(38, 48, 78)
-        } else {
-            egui::Color32::from_rgb(210, 220, 240)
-        };
+        let ch_fill = theme::widget_bg(app.dark_mode);
 
         egui::Grid::new("channels_grid")
             .spacing([4.0, 4.0])
@@ -316,7 +309,7 @@ pub fn draw_tv(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut app.replay_custom_min).hint_text("min").desired_width(40.0));
                 let valid = app.replay_custom_min.parse::<u32>().is_ok();
-                if ui.add_enabled(valid, egui::Button::new("⏪ Go").fill(theme::ACCENT).corner_radius(6.0)).clicked() {
+                if ui.add_enabled(valid, egui::Button::new("⏪ Go").fill(theme::accent_color()).corner_radius(6.0)).clicked() {
                     if let Ok(m) = app.replay_custom_min.parse::<u32>() { replay_mins = Some(m); }
                 }
             });
@@ -376,7 +369,7 @@ pub fn draw_tv(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 section_title(ui, "📸 Capture d'écran");
                 let taking = app.tv_screenshot_loading;
                 let btn_text = if taking { "⏳ Capture..." } else { "📸 Capturer" };
-                if ui.add_enabled(!taking, egui::Button::new(btn_text).fill(theme::ACCENT).corner_radius(8.0).min_size(egui::vec2(ui.available_width(), 32.0))).clicked() {
+                if ui.add_enabled(!taking, egui::Button::new(btn_text).fill(theme::accent_color()).corner_radius(8.0).min_size(egui::vec2(ui.available_width(), 32.0))).clicked() {
                     app.tv_screenshot_loading = true;
                     let id_clone = id.clone();
                     let tx = app.bg_tx.clone();
