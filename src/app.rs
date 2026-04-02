@@ -773,6 +773,14 @@ impl PhoneTvApp {
                 BgEvent::HistoryLoaded { history } => {
                     self.wizard.history = history;
                 }
+                BgEvent::WizardRootabilityResult { rootable, method, confidence, details } => {
+                    if let Some(ref mut root) = self.wizard.root_status {
+                        root.rootable = Some(rootable);
+                        root.root_method = method;
+                    }
+                    self.log(&format!("Rootabilite: {} (confiance: {}) — {}",
+                        if rootable { "OUI" } else { "NON" }, confidence, details));
+                }
             }
         }
     }

@@ -18,6 +18,15 @@ pub struct LlmVuln {
     pub risk: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RootabilityResult {
+    pub rootable: bool,
+    pub confidence: String,
+    pub method: Option<String>,
+    pub details: String,
+    pub risks: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct LlmConfig {
     pub api_key: String,

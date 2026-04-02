@@ -49,6 +49,8 @@ pub enum BgEvent {
     LlmAppVerdicts { verdicts: Vec<AppVerdict> },
     LlmPentestReport { vulns: Vec<Vulnerability> },
     LlmError { message: String },
+    // Rootability
+    WizardRootabilityResult { rootable: bool, method: Option<String>, confidence: String, details: String },
     // Brands events
     BrandsLoaded { db: BrandDb },
     // History events

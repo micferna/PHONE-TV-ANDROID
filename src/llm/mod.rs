@@ -51,6 +51,24 @@ pub fn analyze_pentest(api_key: &str, model: &str, prompt: &str) -> Result<Vec<L
         .map_err(|e| format!("Erreur parsing pentest: {}", e))
 }
 
+pub fn check_rootability(api_key: &str, model: &str, brand: &str, device_model: &str, android_version: &str, security_patch: &str) -> Result<types::RootabilityResult, String> {
+    let prompt = prompts::rootability_prompt(brand, device_model, android_version, security_patch);
+    let response = call_openrouter(api_key, model, &prompt)?;
+    let json_str = extract_json_object(&response);
+
+    serde_json::from_str::<types::RootabilityResult>(json_str)
+        .map_err(|e| format!("Erreur parsing rootabilite: {}", e))
+}
+
+fn extract_json_object(text: &str) -> &str {
+    if let Some(start) = text.find('{') {
+        if let Some(end) = text.rfind('}') {
+            return &text[start..=end];
+        }
+    }
+    text
+}
+
 fn extract_json(text: &str) -> &str {
     if let Some(start) = text.find('[') {
         if let Some(end) = text.rfind(']') {

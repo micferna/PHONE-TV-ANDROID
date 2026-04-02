@@ -23,6 +23,24 @@ APPS:
 {}"#, app_list)
 }
 
+pub fn rootability_prompt(brand: &str, model: &str, android_version: &str, security_patch: &str) -> String {
+    format!(r#"Tu es un expert en securite mobile Android specialise dans le root.
+
+TELEPHONE:
+- Marque: {}
+- Modele: {}
+- Android: {}
+- Patch securite: {}
+
+Reponds UNIQUEMENT en JSON valide avec ce format exact:
+{{"rootable": true/false, "confidence": "haute/moyenne/basse", "method": "methode de root ou null", "details": "explication courte", "risks": "risques du root"}}
+
+Si tu n'es pas sur, mets confidence "basse". Sois precis sur la methode (Magisk via TWRP, Magisk via patch boot.img, KingRoot, etc).
+N'invente pas — si tu ne connais pas ce modele specifique, dis-le."#,
+        brand, model, android_version, security_patch
+    )
+}
+
 pub fn pentest_prompt(
     model: &str,
     android_version: &str,

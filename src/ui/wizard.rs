@@ -373,6 +373,71 @@ fn draw_step_pentest(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
                                 .color(theme::warning_color()),
                         );
                     }
+
+                    // Rootability info
+                    ui.add_space(8.0);
+                    match &root_status.rootable {
+                        Some(true) => {
+                            ui.label(
+                                egui::RichText::new(format!("Rootable: OUI — {}",
+                                    root_status.root_method.as_deref().unwrap_or("methode inconnue")))
+                                    .color(theme::accent_blue())
+                                    .strong(),
+                            );
+                        }
+                        Some(false) => {
+                            ui.label(
+                                egui::RichText::new("Rootable: NON (ou pas de methode connue)")
+                                    .color(theme::text_secondary(app.dark_mode)),
+                            );
+                        }
+                        None => {
+                            if !app.settings.openrouter_api_key.is_empty() {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Rootable: ?").color(theme::warning_color()));
+                                    if ui.button("Verifier via IA").clicked() {
+                                        if let Some(ref info) = app.wizard.device_info.clone() {
+                                            let api_key = app.settings.openrouter_api_key.clone();
+                                            let model = app.settings.llm_model.clone();
+                                            let brand = info.brand.clone();
+                                            let dev_model = info.model.clone();
+                                            let android = info.android_version.clone();
+                                            let patch = info.security_patch.clone();
+                                            let tx = app.bg_tx.clone();
+                                            let ctx2 = ctx.clone();
+                                            std::thread::spawn(move || {
+                                                match crate::llm::check_rootability(&api_key, &model, &brand, &dev_model, &android, &patch) {
+                                                    Ok(result) => {
+                                                        let _ = tx.send(BgEvent::Log(format!(
+                                                            "Rootable: {} (confiance: {}) — {}",
+                                                            if result.rootable { "OUI" } else { "NON" },
+                                                            result.confidence,
+                                                            result.details
+                                                        )));
+                                                        let _ = tx.send(BgEvent::WizardRootabilityResult {
+                                                            rootable: result.rootable,
+                                                            method: result.method,
+                                                            confidence: result.confidence,
+                                                            details: result.details,
+                                                        });
+                                                    }
+                                                    Err(e) => {
+                                                        let _ = tx.send(BgEvent::LlmError { message: e });
+                                                    }
+                                                }
+                                                ctx2.request_repaint();
+                                            });
+                                        }
+                                    }
+                                });
+                            } else {
+                                ui.label(
+                                    egui::RichText::new("Rootable: ? (configurez l'IA pour verifier)")
+                                        .color(theme::text_secondary(app.dark_mode)),
+                                );
+                            }
+                        }
+                    }
                 }
             });
 
