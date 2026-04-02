@@ -76,9 +76,15 @@ pub fn trigger_scan(device_id: &str, tx: &mpsc::Sender<BgEvent>, ctx: &egui::Con
     let tx = tx.clone();
     let ctx = ctx.clone();
     std::thread::spawn(move || {
+        // Envoyer un signal immédiat pour montrer que ça démarre
+        let _ = tx.send(BgEvent::WizardScanProgress { current: 0, total: 0, package: "Chargement de la liste...".into() });
+        ctx.request_repaint();
+
         let all_packages = apps::list_packages(&id, AppFilter::All);
         let total = all_packages.len();
-        let _ = tx.send(BgEvent::Log(format!("Scan: {} packages detectes", total)));
+
+        // Envoyer le total dès qu'on l'a
+        let _ = tx.send(BgEvent::WizardScanProgress { current: 0, total, package: "Demarrage de l'analyse...".into() });
         ctx.request_repaint();
 
         let mut app_infos = Vec::new();

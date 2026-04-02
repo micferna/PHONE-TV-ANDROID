@@ -229,37 +229,57 @@ fn draw_step_scanning(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Conte
     ui.add_space(8.0);
 
     if app.wizard.scan_loading {
-        ui.label(egui::RichText::new("Scan en cours...").size(16.0).strong());
-        ui.add_space(12.0);
-
         let current = app.wizard.scan_current;
         let total = app.wizard.scan_total;
         let progress = app.wizard.scan_progress;
 
-        // Barre de progression avec compteur DANS la barre
-        let bar_text = if total > 0 {
-            format!("{} / {} applications ({:.0}%)", current, total, progress * 100.0)
+        ui.label(egui::RichText::new("Scan en cours...").size(16.0).strong());
+        ui.add_space(12.0);
+
+        // Toujours afficher la barre
+        if total > 0 {
+            // Barre avec compteur dedans
+            let bar_text = format!("{} / {} applications ({:.0}%)", current, total, progress * 100.0);
+            ui.add(egui::ProgressBar::new(progress)
+                .text(bar_text)
+                .desired_width(ui.available_width()));
         } else {
-            "Chargement de la liste des packages...".to_string()
-        };
-        ui.add(egui::ProgressBar::new(progress)
-            .text(bar_text)
-            .desired_width(ui.available_width()));
-
-        ui.add_space(8.0);
-
-        // Nom du package en cours d'analyse
-        if !app.wizard.scan_current_package.is_empty() {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(
-                    egui::RichText::new(format!("Analyse: {}", app.wizard.scan_current_package))
-                        .size(12.0)
-                        .family(egui::FontFamily::Monospace)
-                        .color(theme::text_secondary(app.dark_mode)),
-                );
-            });
+            // Barre indéterminée animée pendant le chargement initial
+            ui.add(egui::ProgressBar::new(0.0)
+                .text("Recuperation de la liste des packages...")
+                .desired_width(ui.available_width())
+                .animate(true));
         }
+
+        ui.add_space(10.0);
+
+        // Package en cours d'analyse — toujours visible
+        ui.horizontal(|ui| {
+            ui.spinner();
+            let pkg_text = if app.wizard.scan_current_package.is_empty() {
+                "Connexion a l'appareil...".to_string()
+            } else {
+                app.wizard.scan_current_package.clone()
+            };
+            ui.label(
+                egui::RichText::new(pkg_text)
+                    .size(13.0)
+                    .family(egui::FontFamily::Monospace)
+                    .color(theme::accent_blue()),
+            );
+        });
+
+        // Estimation du temps restant
+        if total > 0 && current > 0 {
+            let remaining = total - current;
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(format!("~{} applications restantes", remaining))
+                    .size(11.0)
+                    .color(theme::text_secondary(app.dark_mode)),
+            );
+        }
+
         return;
     }
 
