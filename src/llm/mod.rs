@@ -4,7 +4,11 @@ pub mod types;
 use types::{AppVerdict, LlmVuln};
 
 pub fn call_openrouter(api_key: &str, model: &str, prompt: &str) -> Result<String, String> {
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("Erreur client: {}", e))?;
+
     let body = serde_json::json!({
         "model": model,
         "messages": [
@@ -22,16 +26,21 @@ pub fn call_openrouter(api_key: &str, model: &str, prompt: &str) -> Result<Strin
         .send()
         .map_err(|e| format!("Erreur reseau: {}", e))?;
 
-    if !resp.status().is_success() {
-        return Err(format!("Erreur API: {}", resp.status()));
+    let status = resp.status();
+    // Lire le body comme texte brut d'abord
+    let body_text = resp.text().map_err(|e| format!("Erreur lecture reponse: {}", e))?;
+
+    if !status.is_success() {
+        return Err(format!("Erreur API {}: {}", status, &body_text[..200.min(body_text.len())]));
     }
 
-    let json: serde_json::Value = resp.json().map_err(|e| format!("Erreur JSON: {}", e))?;
+    let json: serde_json::Value = serde_json::from_str(&body_text)
+        .map_err(|e| format!("Erreur parsing JSON: {} — reponse brute: {}", e, &body_text[..300.min(body_text.len())]))?;
 
     json["choices"][0]["message"]["content"]
         .as_str()
         .map(|s| s.to_string())
-        .ok_or_else(|| "Reponse vide du LLM".to_string())
+        .ok_or_else(|| format!("Reponse inattendue du LLM: {}", &body_text[..300.min(body_text.len())]))
 }
 
 pub fn analyze_apps(api_key: &str, model: &str, apps: &[(String, Vec<String>, String)]) -> Result<Vec<AppVerdict>, String> {
