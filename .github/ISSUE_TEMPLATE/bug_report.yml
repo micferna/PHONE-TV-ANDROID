@@ -1,0 +1,63 @@
+name: Bug report
+description: Report something that is broken or misbehaving
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill in
+        as much detail as possible — it makes a big difference.
+  - type: input
+    id: version
+    attributes:
+      label: Phone-TV version
+      description: Run `phone-tv --version` or check the title bar.
+      placeholder: e.g. 0.5.0
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: e.g. Ubuntu 24.04, Windows 11
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device brand & Android version
+      description: Leave blank if not relevant to the bug.
+      placeholder: e.g. Samsung Galaxy S22, Android 14
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you do, click, type?
+      placeholder: |
+        1. Open Phone-TV
+        2. Plug in a Samsung device
+        3. Click "Scan"
+        4. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include any error message exactly as shown.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots
+      description: |
+        Paste relevant log output (in a code block) or attach
+        screenshots. Strip anything sensitive.
+      render: shell

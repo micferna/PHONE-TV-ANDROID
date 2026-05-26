@@ -1,5 +1,11 @@
 # Phone-TV - Contrôle Android Phone & TV via ADB
 
+[![CI](https://github.com/micferna/PHONE-TV-ANDROID/actions/workflows/ci.yml/badge.svg)](https://github.com/micferna/PHONE-TV-ANDROID/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/micferna/PHONE-TV-ANDROID/actions/workflows/codeql.yml/badge.svg)](https://github.com/micferna/PHONE-TV-ANDROID/actions/workflows/codeql.yml)
+[![Supply chain](https://github.com/micferna/PHONE-TV-ANDROID/actions/workflows/supply-chain.yml/badge.svg)](https://github.com/micferna/PHONE-TV-ANDROID/actions/workflows/supply-chain.yml)
+[![Secret scan](https://github.com/micferna/PHONE-TV-ANDROID/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/micferna/PHONE-TV-ANDROID/actions/workflows/gitleaks.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
 Application de bureau en Rust pour contrôler vos téléphones et TV Android depuis votre PC Linux via ADB (Android Debug Bridge).
 
 ## Fonctionnalités
