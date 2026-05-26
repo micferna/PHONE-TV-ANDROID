@@ -13,6 +13,9 @@ ignore = [
     # paste 1.0.15 — unmaintained, pulled transitively via metal -> wgpu-hal -> eframe.
     # No patched version exists; nothing to do until upstream egui drops the dependency.
     "RUSTSEC-2024-0436",
+    # rand 0.8.5 / 0.9.2 — soundness issue scoped to a specific custom-logger pattern
+    # we do not use. Pulled transitively via egui_extras (phf) and reqwest (quinn).
+    "RUSTSEC-2026-0097",
 ]
 
 [licenses]
