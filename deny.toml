@@ -9,7 +9,11 @@ no-default-features = false
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/RustSec/advisory-db"]
 yanked = "warn"
-ignore = []
+ignore = [
+    # paste 1.0.15 — unmaintained, pulled transitively via metal -> wgpu-hal -> eframe.
+    # No patched version exists; nothing to do until upstream egui drops the dependency.
+    "RUSTSEC-2024-0436",
+]
 
 [licenses]
 confidence-threshold = 0.8
@@ -27,6 +31,9 @@ allow = [
     "MPL-2.0",
     "0BSD",
     "BSL-1.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    "CDLA-Permissive-2.0",
 ]
 exceptions = []
 

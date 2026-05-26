@@ -91,9 +91,13 @@ fn main() {
     let history = fixture_history();
     let apps_300 = fixture_apps(300);
     let apps_1000 = fixture_apps(1000);
-    bench("reappeared_packages (10 sessions × 300 apps)", 10_000, || {
-        let _ = std::hint::black_box(reappeared_packages(&history, &apps_300));
-    });
+    bench(
+        "reappeared_packages (10 sessions × 300 apps)",
+        10_000,
+        || {
+            let _ = std::hint::black_box(reappeared_packages(&history, &apps_300));
+        },
+    );
     bench(
         "reappeared_packages (10 sessions × 1000 apps)",
         5_000,
