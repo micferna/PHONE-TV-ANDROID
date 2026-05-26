@@ -39,11 +39,7 @@ fn tinted_card_frame(dark_mode: bool, severity: &Severity) -> egui::Frame {
     let tint = match severity {
         Severity::Critical => {
             if dark_mode {
-                egui::Color32::from_rgb(
-                    base.r().saturating_add(30),
-                    base.g(),
-                    base.b(),
-                )
+                egui::Color32::from_rgb(base.r().saturating_add(30), base.g(), base.b())
             } else {
                 egui::Color32::from_rgb(255, 235, 235)
             }
@@ -213,7 +209,9 @@ fn trigger_apps_load(app: &mut PhoneTvApp, ctx: &egui::Context) {
 }
 
 fn trigger_posture_load(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &str) {
-    if app.security_posture_loading { return; }
+    if app.security_posture_loading {
+        return;
+    }
     app.security_posture_loading = true;
     let tx = app.bg_tx.clone();
     let ctx2 = ctx.clone();
@@ -226,7 +224,9 @@ fn trigger_posture_load(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &s
 }
 
 fn trigger_processes_load(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &str) {
-    if app.security_processes_loading { return; }
+    if app.security_processes_loading {
+        return;
+    }
     app.security_processes_loading = true;
     let tx = app.bg_tx.clone();
     let ctx2 = ctx.clone();
@@ -239,7 +239,9 @@ fn trigger_processes_load(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: 
 }
 
 fn trigger_permissions_load(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &str) {
-    if app.security_permissions_loading { return; }
+    if app.security_permissions_loading {
+        return;
+    }
     app.security_permissions_loading = true;
     let apps: Vec<String> = app
         .security_apps
@@ -353,14 +355,24 @@ pub fn draw_security(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
                 (
                     SecurityView::Score,
                     "\u{1f6e1} Score",
-                    score_value.and_then(|s| if s < 80 { Some(theme::danger_color()) } else { None }),
+                    score_value.and_then(|s| {
+                        if s < 80 {
+                            Some(theme::danger_color())
+                        } else {
+                            None
+                        }
+                    }),
                 ),
                 (SecurityView::Apps, "\u{1f4e6} Apps", None),
                 (SecurityView::Permissions, "\u{1f510} Permissions", None),
                 (
                     SecurityView::Blacklist,
                     "\u{1f6ab} Blacklist",
-                    if has_blacklist_alerts { Some(theme::danger_color()) } else { None },
+                    if has_blacklist_alerts {
+                        Some(theme::danger_color())
+                    } else {
+                        None
+                    },
                 ),
                 (SecurityView::Monitoring, "\u{1f4ca} Monitoring", None),
                 (SecurityView::Posture, "\u{2699} Posture", None),
@@ -414,77 +426,6 @@ pub fn draw_security(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
         SecurityView::Blacklist => draw_blacklist(ui, app, ctx),
         SecurityView::Monitoring => draw_monitoring(ui, app, ctx),
         SecurityView::Posture => draw_posture(ui, app, ctx),
-        SecurityView::Cleaning => {
-            ui.heading("Nettoyage");
-            ui.add_space(8.0);
-
-            // OpenRouter API settings
-            ui.collapsing("Configuration IA", |ui| {
-                ui.label("Cle API OpenRouter:");
-                ui.add(egui::TextEdit::singleline(&mut app.settings.openrouter_api_key).password(true));
-                ui.label("Modele LLM (choisir ou taper manuellement):");
-                let models = [
-                    "anthropic/claude-sonnet-4",
-                    "anthropic/claude-haiku-4",
-                    "google/gemini-2.5-flash",
-                    "google/gemini-2.5-pro",
-                    "openai/gpt-4o",
-                    "openai/gpt-4o-mini",
-                    "meta-llama/llama-4-maverick",
-                    "meta-llama/llama-4-scout",
-                    "deepseek/deepseek-chat-v3",
-                    "qwen/qwen3-235b-a22b",
-                    "mistralai/mistral-medium",
-                ];
-                ui.add(egui::TextEdit::singleline(&mut app.settings.llm_model)
-                    .desired_width(350.0)
-                    .hint_text("ex: anthropic/claude-sonnet-4"));
-                ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
-                    for model in &models {
-                        if ui.selectable_label(app.settings.llm_model == *model, *model).clicked() {
-                            app.settings.llm_model = model.to_string();
-                        }
-                    }
-                });
-                if ui.button("Sauvegarder").clicked() {
-                    app.save_settings();
-                }
-            });
-            ui.add_space(12.0);
-
-            // Launch wizard button
-            if ui.button(egui::RichText::new("Lancer l'assistant de nettoyage complet").size(14.0)).clicked() {
-                app.wizard.start();
-            }
-
-            // Show device history
-            if let Some(id) = app.get_selected_id() {
-                if let Some(serial_raw) = crate::adb::adb_device(&id, &["shell", "getprop", "ro.serialno"]) {
-                    let serial = serial_raw.trim().to_string();
-                    if let Some(history) = crate::history::load_history(&serial) {
-                        ui.add_space(16.0);
-                        ui.label(egui::RichText::new("Historique").size(16.0).strong());
-                        ui.label(format!("Appareil: {}", history.display_name));
-                        ui.label(format!("Premiere connexion: {}", history.first_seen));
-
-                        for session in history.sessions.iter().rev().take(5) {
-                            ui.add_space(8.0);
-                            ui.group(|ui| {
-                                ui.label(egui::RichText::new(&session.date).strong());
-                                ui.label(format!("Score: {} -> {}", session.score_before, session.score_after));
-                                ui.label(format!("Profil: {}", session.profile_used));
-                                ui.label(format!("{} supprimees, {} desactivees, {} echecs",
-                                    session.apps_removed.len(),
-                                    session.apps_disabled.len(),
-                                    session.apps_failed.len(),
-                                ));
-                            });
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -516,8 +457,7 @@ fn draw_score(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
                 .add_enabled(
                     refresh_enabled,
                     egui::Button::new(
-                        egui::RichText::new("\u{1f504} Rafraîchir")
-                            .color(egui::Color32::WHITE),
+                        egui::RichText::new("\u{1f504} Rafraîchir").color(egui::Color32::WHITE),
                     )
                     .fill(theme::accent_blue())
                     .corner_radius(6.0),
@@ -672,9 +612,7 @@ fn draw_score(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
                         });
 
                         ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new(&issue.description).size(13.0),
-                        );
+                        ui.label(egui::RichText::new(&issue.description).size(13.0));
 
                         // Actionable app list for sideloaded / dangerous_perms issues
                         if issue.id == "sideloaded" || issue.id == "dangerous_perms" {
@@ -683,7 +621,9 @@ fn draw_score(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
                                 ui.add_space(4.0);
                                 for pkg_name in &app_names {
                                     let pkg_name = pkg_name.trim();
-                                    if pkg_name.is_empty() { continue; }
+                                    if pkg_name.is_empty() {
+                                        continue;
+                                    }
                                     ui.horizontal(|ui| {
                                         ui.label(
                                             egui::RichText::new(pkg_name)
@@ -692,30 +632,38 @@ fn draw_score(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
                                         );
                                         if let Some(dev) = app.get_selected_id() {
                                             let pkg = pkg_name.to_string();
-                                            if ui.add(
-                                                egui::Button::new(
-                                                    egui::RichText::new("Désinstaller")
-                                                        .small()
-                                                        .color(egui::Color32::WHITE),
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new("Désinstaller")
+                                                            .small()
+                                                            .color(egui::Color32::WHITE),
+                                                    )
+                                                    .fill(theme::danger_color())
+                                                    .corner_radius(4.0),
                                                 )
-                                                .fill(theme::danger_color())
-                                                .corner_radius(4.0),
-                                            ).clicked() {
+                                                .clicked()
+                                            {
                                                 app.confirm_uninstall = Some(pkg.clone());
                                             }
-                                            if ui.add(
-                                                egui::Button::new(
-                                                    egui::RichText::new("Désactiver").small(),
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new("Désactiver").small(),
+                                                    )
+                                                    .corner_radius(4.0),
                                                 )
-                                                .corner_radius(4.0),
-                                            ).clicked() {
+                                                .clicked()
+                                            {
                                                 let tx = app.bg_tx.clone();
                                                 let ctx2 = ctx.clone();
                                                 let dev2 = dev.clone();
                                                 let pkg2 = pkg.clone();
                                                 std::thread::spawn(move || {
                                                     let (success, message) =
-                                                        crate::security::apps::disable_app(&dev2, &pkg2);
+                                                        crate::security::apps::disable_app(
+                                                            &dev2, &pkg2,
+                                                        );
                                                     let _ = tx.send(BgEvent::AppActionResult {
                                                         package: pkg2,
                                                         action: "disable".into(),
@@ -738,7 +686,9 @@ fn draw_score(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
                                 ui.add_space(4.0);
                                 for svc in &services {
                                     let svc = svc.trim();
-                                    if svc.is_empty() { continue; }
+                                    if svc.is_empty() {
+                                        continue;
+                                    }
                                     ui.label(
                                         egui::RichText::new(format!("  \u{2022} {}", svc))
                                             .size(12.0)
@@ -805,8 +755,7 @@ fn draw_apps(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
         Some(id) => id,
         None => {
             ui.label(
-                egui::RichText::new("Sélectionnez un appareil.")
-                    .color(theme::text_secondary(dark)),
+                egui::RichText::new("Sélectionnez un appareil.").color(theme::text_secondary(dark)),
             );
             return;
         }
@@ -903,7 +852,9 @@ fn draw_apps(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
 
             // Sort combo
             ui.label(
-                egui::RichText::new("Tri :").size(12.0).color(theme::text_secondary(dark)),
+                egui::RichText::new("Tri :")
+                    .size(12.0)
+                    .color(theme::text_secondary(dark)),
             );
             egui::ComboBox::from_id_salt("app_sort")
                 .selected_text(match app.security_apps_sort {
@@ -944,8 +895,7 @@ fn draw_apps(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
                 .add_enabled(
                     load_enabled,
                     egui::Button::new(
-                        egui::RichText::new("\u{1f504} Recharger")
-                            .color(egui::Color32::WHITE),
+                        egui::RichText::new("\u{1f504} Recharger").color(egui::Color32::WHITE),
                     )
                     .fill(theme::accent_blue())
                     .corner_radius(6.0),
@@ -976,16 +926,11 @@ fn draw_apps(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
         .collect();
 
     match app.security_apps_sort {
-        AppSort::Danger => display_apps.sort_by(|a, b| {
-            app_danger_score(b).cmp(&app_danger_score(a))
-        }),
+        AppSort::Danger => display_apps.sort_by_key(|a| std::cmp::Reverse(app_danger_score(a))),
         AppSort::Name => display_apps.sort_by(|a, b| a.package.cmp(&b.package)),
-        AppSort::InstallDate => {
-            display_apps.sort_by(|a, b| b.first_install.cmp(&a.first_install))
-        }
-        AppSort::Source => display_apps.sort_by(|a, b| {
-            format!("{:?}", a.installer).cmp(&format!("{:?}", b.installer))
-        }),
+        AppSort::InstallDate => display_apps.sort_by(|a, b| b.first_install.cmp(&a.first_install)),
+        AppSort::Source => display_apps
+            .sort_by(|a, b| format!("{:?}", a.installer).cmp(&format!("{:?}", b.installer))),
     }
 
     // Count summary
@@ -1155,13 +1100,10 @@ fn draw_app_card(
                     // ── Permissions badges ─────────────────────────
                     if info.dangerous_perm_count > 0 {
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(
-                                egui::RichText::new("\u{1f510}")
-                                    .small(),
-                            );
+                            ui.label(egui::RichText::new("\u{1f510}").small());
                             let high_danger = ["Caméra", "Micro", "Localisation"];
                             for perm in &info.dangerous_perm_names {
-                                let color = if high_danger.iter().any(|h| *h == perm.as_str()) {
+                                let color = if high_danger.contains(&perm.as_str()) {
                                     theme::danger_color()
                                 } else {
                                     theme::warning_color()
@@ -1175,61 +1117,56 @@ fn draw_app_card(
                     }
 
                     // ── Collapsible details ────────────────────────
-                    egui::CollapsingHeader::new(
-                        egui::RichText::new("Voir détails").small(),
-                    )
-                    .id_salt(&info.package)
-                    .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(format!("Package : {}", info.package))
-                                .small()
-                                .color(theme::text_secondary(dark)),
-                        );
-                        if !info.first_install.is_empty() {
+                    egui::CollapsingHeader::new(egui::RichText::new("Voir détails").small())
+                        .id_salt(&info.package)
+                        .show(ui, |ui| {
                             ui.label(
-                                egui::RichText::new(format!(
-                                    "Installé : {}",
-                                    info.first_install
-                                ))
-                                .small()
-                                .color(theme::text_secondary(dark)),
-                            );
-                        }
-                        if !info.last_update.is_empty() {
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "Mis à jour : {}",
-                                    info.last_update
-                                ))
-                                .small()
-                                .color(theme::text_secondary(dark)),
-                            );
-                        }
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "Source : {:?}",
-                                info.installer
-                            ))
-                            .small()
-                            .color(theme::text_secondary(dark)),
-                        );
-                        if !info.dangerous_perm_names.is_empty() {
-                            ui.add_space(4.0);
-                            ui.label(
-                                egui::RichText::new("Permissions dangereuses accordées :")
+                                egui::RichText::new(format!("Package : {}", info.package))
                                     .small()
-                                    .strong()
                                     .color(theme::text_secondary(dark)),
                             );
-                            for perm in &info.dangerous_perm_names {
+                            if !info.first_install.is_empty() {
                                 ui.label(
-                                    egui::RichText::new(format!("  • {} ✓", perm))
-                                        .small()
-                                        .color(theme::warning_color()),
+                                    egui::RichText::new(format!(
+                                        "Installé : {}",
+                                        info.first_install
+                                    ))
+                                    .small()
+                                    .color(theme::text_secondary(dark)),
                                 );
                             }
-                        }
-                    });
+                            if !info.last_update.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Mis à jour : {}",
+                                        info.last_update
+                                    ))
+                                    .small()
+                                    .color(theme::text_secondary(dark)),
+                                );
+                            }
+                            ui.label(
+                                egui::RichText::new(format!("Source : {:?}", info.installer))
+                                    .small()
+                                    .color(theme::text_secondary(dark)),
+                            );
+                            if !info.dangerous_perm_names.is_empty() {
+                                ui.add_space(4.0);
+                                ui.label(
+                                    egui::RichText::new("Permissions dangereuses accordées :")
+                                        .small()
+                                        .strong()
+                                        .color(theme::text_secondary(dark)),
+                                );
+                                for perm in &info.dangerous_perm_names {
+                                    ui.label(
+                                        egui::RichText::new(format!("  • {} ✓", perm))
+                                            .small()
+                                            .color(theme::warning_color()),
+                                    );
+                                }
+                            }
+                        });
                 } else {
                     ui.horizontal(|ui| {
                         ui.spinner();
@@ -1257,7 +1194,11 @@ fn draw_app_card(
                                 .small()
                                 .color(egui::Color32::WHITE),
                         )
-                        .fill(if is_system_filter { theme::text_dim(dark) } else { theme::danger_color() })
+                        .fill(if is_system_filter {
+                            theme::text_dim(dark)
+                        } else {
+                            theme::danger_color()
+                        })
                         .corner_radius(4.0),
                     )
                     .clicked()
@@ -1268,10 +1209,8 @@ fn draw_app_card(
                 // Clear data
                 if ui
                     .add(
-                        egui::Button::new(
-                            egui::RichText::new("Effacer données").small(),
-                        )
-                        .corner_radius(4.0),
+                        egui::Button::new(egui::RichText::new("Effacer données").small())
+                            .corner_radius(4.0),
                     )
                     .clicked()
                 {
@@ -1281,10 +1220,8 @@ fn draw_app_card(
                 // Force stop
                 if ui
                     .add(
-                        egui::Button::new(
-                            egui::RichText::new("Forcer arrêt").small(),
-                        )
-                        .corner_radius(4.0),
+                        egui::Button::new(egui::RichText::new("Forcer arrêt").small())
+                            .corner_radius(4.0),
                     )
                     .clicked()
                 {
@@ -1308,10 +1245,8 @@ fn draw_app_card(
                 if info.enabled {
                     if ui
                         .add(
-                            egui::Button::new(
-                                egui::RichText::new("Désactiver").small(),
-                            )
-                            .corner_radius(4.0),
+                            egui::Button::new(egui::RichText::new("Désactiver").small())
+                                .corner_radius(4.0),
                         )
                         .clicked()
                     {
@@ -1348,8 +1283,7 @@ fn draw_app_card(
                     let pkg2 = pkg.clone();
                     let dev2 = dev.clone();
                     std::thread::spawn(move || {
-                        let (success, message) =
-                            crate::security::apps::enable_app(&dev2, &pkg2);
+                        let (success, message) = crate::security::apps::enable_app(&dev2, &pkg2);
                         let _ = tx.send(BgEvent::AppActionResult {
                             package: pkg2,
                             action: "enable".into(),
@@ -1373,17 +1307,13 @@ fn draw_confirm_dialogs(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &s
             .resizable(false)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.label(format!(
-                    "Effacer toutes les données de {} ?",
-                    pkg
-                ));
+                ui.label(format!("Effacer toutes les données de {} ?", pkg));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui
                         .add(
                             egui::Button::new(
-                                egui::RichText::new("Confirmer")
-                                    .color(egui::Color32::WHITE),
+                                egui::RichText::new("Confirmer").color(egui::Color32::WHITE),
                             )
                             .fill(theme::danger_color())
                             .corner_radius(6.0),
@@ -1435,8 +1365,7 @@ fn draw_confirm_dialogs(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &s
                     if ui
                         .add(
                             egui::Button::new(
-                                egui::RichText::new("Désinstaller")
-                                    .color(egui::Color32::WHITE),
+                                egui::RichText::new("Désinstaller").color(egui::Color32::WHITE),
                             )
                             .fill(theme::danger_color())
                             .corner_radius(6.0),
@@ -1480,8 +1409,7 @@ fn draw_permissions(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context
         Some(id) => id,
         None => {
             ui.label(
-                egui::RichText::new("Sélectionnez un appareil.")
-                    .color(theme::text_secondary(dark)),
+                egui::RichText::new("Sélectionnez un appareil.").color(theme::text_secondary(dark)),
             );
             return;
         }
@@ -1549,9 +1477,7 @@ fn draw_permissions(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context
     }
 
     match app.security_permission_view {
-        PermissionView::ByPermission => {
-            draw_permissions_by_permission(ui, app, ctx, &device_id)
-        }
+        PermissionView::ByPermission => draw_permissions_by_permission(ui, app, ctx, &device_id),
         PermissionView::ByApp => draw_permissions_by_app(ui, app, ctx, &device_id),
     }
 }
@@ -1564,7 +1490,11 @@ fn draw_permissions_by_permission(
 ) {
     let groups: &[(&str, &str, &[&str])] = &[
         ("\u{1f4f7}", "Caméra", &["android.permission.CAMERA"]),
-        ("\u{1f3a4}", "Microphone", &["android.permission.RECORD_AUDIO"]),
+        (
+            "\u{1f3a4}",
+            "Microphone",
+            &["android.permission.RECORD_AUDIO"],
+        ),
         (
             "\u{1f4cd}",
             "Localisation",
@@ -1585,10 +1515,7 @@ fn draw_permissions_by_permission(
         (
             "\u{1f4e8}",
             "SMS",
-            &[
-                "android.permission.READ_SMS",
-                "android.permission.SEND_SMS",
-            ],
+            &["android.permission.READ_SMS", "android.permission.SEND_SMS"],
         ),
         (
             "\u{1f4de}",
@@ -1616,7 +1543,11 @@ fn draw_permissions_by_permission(
                 "android.permission.WRITE_CALENDAR",
             ],
         ),
-        ("\u{1f9e0}", "Capteurs", &["android.permission.BODY_SENSORS"]),
+        (
+            "\u{1f9e0}",
+            "Capteurs",
+            &["android.permission.BODY_SENSORS"],
+        ),
     ];
 
     let dark = app.dark_mode;
@@ -1792,15 +1723,15 @@ fn draw_permissions_by_app(
                 );
             } else {
                 // Count dangerous granted
-                let dangerous_count = perms
-                    .iter()
-                    .filter(|p| p.dangerous && p.granted)
-                    .count();
+                let dangerous_count = perms.iter().filter(|p| p.dangerous && p.granted).count();
                 if dangerous_count > 0 {
                     ui.horizontal(|ui| {
                         badge(
                             ui,
-                            &format!("{} permission(s) dangereuse(s) accordée(s)", dangerous_count),
+                            &format!(
+                                "{} permission(s) dangereuse(s) accordée(s)",
+                                dangerous_count
+                            ),
                             theme::danger_color(),
                         );
                     });
@@ -2048,12 +1979,9 @@ fn draw_blacklist(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) 
             );
             if ui
                 .add(
-                    egui::Button::new(
-                        egui::RichText::new("+ Ajouter")
-                            .color(egui::Color32::WHITE),
-                    )
-                    .fill(theme::success_color())
-                    .corner_radius(6.0),
+                    egui::Button::new(egui::RichText::new("+ Ajouter").color(egui::Color32::WHITE))
+                        .fill(theme::success_color())
+                        .corner_radius(6.0),
                 )
                 .clicked()
                 && !app.blacklist_new_entry.is_empty()
@@ -2119,23 +2047,20 @@ fn draw_blacklist(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) 
                 card_frame(dark).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(entry).size(13.0));
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if ui
-                                    .add(
-                                        egui::Button::new(
-                                            egui::RichText::new("\u{2715}")
-                                                .color(theme::danger_color()),
-                                        )
-                                        .corner_radius(4.0),
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("\u{2715}")
+                                            .color(theme::danger_color()),
                                     )
-                                    .clicked()
-                                {
-                                    to_remove = Some(i);
-                                }
-                            },
-                        );
+                                    .corner_radius(4.0),
+                                )
+                                .clicked()
+                            {
+                                to_remove = Some(i);
+                            }
+                        });
                     });
                 });
                 ui.add_space(2.0);
@@ -2174,8 +2099,7 @@ fn draw_monitoring(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context)
         Some(id) => id,
         None => {
             ui.label(
-                egui::RichText::new("Sélectionnez un appareil.")
-                    .color(theme::text_secondary(dark)),
+                egui::RichText::new("Sélectionnez un appareil.").color(theme::text_secondary(dark)),
             );
             return;
         }
@@ -2223,12 +2147,7 @@ fn draw_monitoring(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context)
     }
 }
 
-fn draw_processes(
-    ui: &mut egui::Ui,
-    app: &mut PhoneTvApp,
-    ctx: &egui::Context,
-    device_id: &str,
-) {
+fn draw_processes(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &str) {
     let dark = app.dark_mode;
 
     // Auto-refresh logic
@@ -2245,8 +2164,7 @@ fn draw_processes(
         if ui
             .add(
                 egui::Button::new(
-                    egui::RichText::new("\u{1f504} Rafraîchir")
-                        .color(egui::Color32::WHITE),
+                    egui::RichText::new("\u{1f504} Rafraîchir").color(egui::Color32::WHITE),
                 )
                 .fill(theme::accent_blue())
                 .corner_radius(6.0),
@@ -2318,8 +2236,7 @@ fn draw_processes(
                                 .color(theme::text_secondary(dark)),
                         );
                         ui.label(
-                            egui::RichText::new(format!("{} MB", proc.memory_kb / 1024))
-                                .size(12.0),
+                            egui::RichText::new(format!("{} MB", proc.memory_kb / 1024)).size(12.0),
                         );
                         ui.label(
                             egui::RichText::new(format!("{}", proc.adj))
@@ -2374,12 +2291,7 @@ fn draw_processes(
         });
 }
 
-fn draw_data_usage(
-    ui: &mut egui::Ui,
-    app: &mut PhoneTvApp,
-    ctx: &egui::Context,
-    device_id: &str,
-) {
+fn draw_data_usage(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &str) {
     let dark = app.dark_mode;
 
     // Auto-load (with guard)
@@ -2399,8 +2311,7 @@ fn draw_data_usage(
         if ui
             .add(
                 egui::Button::new(
-                    egui::RichText::new("\u{1f504} Rafraîchir")
-                        .color(egui::Color32::WHITE),
+                    egui::RichText::new("\u{1f504} Rafraîchir").color(egui::Color32::WHITE),
                 )
                 .fill(theme::accent_blue())
                 .corner_radius(6.0),
@@ -2451,9 +2362,7 @@ fn draw_data_usage(
                     ui.end_row();
 
                     for usage in &app.security_data_usage {
-                        ui.label(
-                            egui::RichText::new(&usage.package).size(12.0),
-                        );
+                        ui.label(egui::RichText::new(&usage.package).size(12.0));
                         ui.label(
                             egui::RichText::new(format_bytes(usage.wifi_rx))
                                 .size(12.0)
@@ -2480,12 +2389,7 @@ fn draw_data_usage(
         });
 }
 
-fn draw_wakelocks(
-    ui: &mut egui::Ui,
-    app: &mut PhoneTvApp,
-    ctx: &egui::Context,
-    device_id: &str,
-) {
+fn draw_wakelocks(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &str) {
     let dark = app.dark_mode;
 
     // Auto-load (with guard)
@@ -2505,8 +2409,7 @@ fn draw_wakelocks(
         if ui
             .add(
                 egui::Button::new(
-                    egui::RichText::new("\u{1f504} Rafraîchir")
-                        .color(egui::Color32::WHITE),
+                    egui::RichText::new("\u{1f504} Rafraîchir").color(egui::Color32::WHITE),
                 )
                 .fill(theme::accent_blue())
                 .corner_radius(6.0),
@@ -2582,8 +2485,7 @@ fn draw_posture(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
         Some(id) => id,
         None => {
             ui.label(
-                egui::RichText::new("Sélectionnez un appareil.")
-                    .color(theme::text_secondary(dark)),
+                egui::RichText::new("Sélectionnez un appareil.").color(theme::text_secondary(dark)),
             );
             return;
         }
@@ -2601,8 +2503,7 @@ fn draw_posture(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
             if ui
                 .add(
                     egui::Button::new(
-                        egui::RichText::new("\u{1f504} Rafraîchir")
-                            .color(egui::Color32::WHITE),
+                        egui::RichText::new("\u{1f504} Rafraîchir").color(egui::Color32::WHITE),
                     )
                     .fill(theme::accent_blue())
                     .corner_radius(6.0),
@@ -2686,19 +2587,12 @@ fn draw_posture(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
                             PostureStatus::Warning => theme::warning_color(),
                             PostureStatus::Bad => theme::danger_color(),
                         };
-                        let (rect, _) = ui.allocate_exact_size(
-                            egui::vec2(8.0, 8.0),
-                            egui::Sense::hover(),
-                        );
-                        ui.painter()
-                            .circle_filled(rect.center(), 4.0, dot_color);
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                        ui.painter().circle_filled(rect.center(), 4.0, dot_color);
 
                         ui.vertical(|ui| {
-                            ui.label(
-                                egui::RichText::new(&check.name)
-                                    .strong()
-                                    .size(13.0),
-                            );
+                            ui.label(egui::RichText::new(&check.name).strong().size(13.0));
                             ui.label(
                                 egui::RichText::new(&check.value)
                                     .size(12.0)
@@ -2737,8 +2631,7 @@ fn draw_posture(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context) {
                                                 crate::security::posture::check_device_posture(
                                                     &dev,
                                                 );
-                                            let _ =
-                                                tx.send(BgEvent::SecurityPosture { checks });
+                                            let _ = tx.send(BgEvent::SecurityPosture { checks });
                                             ctx2.request_repaint();
                                         });
                                     }

@@ -57,15 +57,27 @@ pub fn danger_color() -> egui::Color32 {
 }
 
 pub fn sidebar_fill(dark_mode: bool) -> egui::Color32 {
-    if dark_mode { DARK_SIDEBAR } else { LIGHT_SIDEBAR }
+    if dark_mode {
+        DARK_SIDEBAR
+    } else {
+        LIGHT_SIDEBAR
+    }
 }
 
 pub fn card_bg(dark_mode: bool) -> egui::Color32 {
-    if dark_mode { DARK_CARD } else { LIGHT_CARD }
+    if dark_mode {
+        DARK_CARD
+    } else {
+        LIGHT_CARD
+    }
 }
 
 pub fn card_border(dark_mode: bool) -> egui::Color32 {
-    if dark_mode { DARK_CARD_BORDER } else { LIGHT_CARD_BORDER }
+    if dark_mode {
+        DARK_CARD_BORDER
+    } else {
+        LIGHT_CARD_BORDER
+    }
 }
 
 pub fn card_selected(dark_mode: bool) -> egui::Color32 {
@@ -77,19 +89,35 @@ pub fn card_selected(dark_mode: bool) -> egui::Color32 {
 }
 
 pub fn text_primary(dark_mode: bool) -> egui::Color32 {
-    if dark_mode { DARK_TEXT } else { LIGHT_TEXT }
+    if dark_mode {
+        DARK_TEXT
+    } else {
+        LIGHT_TEXT
+    }
 }
 
 pub fn text_secondary(dark_mode: bool) -> egui::Color32 {
-    if dark_mode { DARK_TEXT_SECONDARY } else { LIGHT_TEXT_SECONDARY }
+    if dark_mode {
+        DARK_TEXT_SECONDARY
+    } else {
+        LIGHT_TEXT_SECONDARY
+    }
 }
 
 pub fn text_dim(dark_mode: bool) -> egui::Color32 {
-    if dark_mode { DARK_TEXT_DIM } else { LIGHT_TEXT_SECONDARY }
+    if dark_mode {
+        DARK_TEXT_DIM
+    } else {
+        LIGHT_TEXT_SECONDARY
+    }
 }
 
 pub fn widget_bg(dark_mode: bool) -> egui::Color32 {
-    if dark_mode { DARK_WIDGET_BG } else { LIGHT_WIDGET_BG }
+    if dark_mode {
+        DARK_WIDGET_BG
+    } else {
+        LIGHT_WIDGET_BG
+    }
 }
 
 // ── Theme application ───────────────────────────────────────────────
@@ -103,7 +131,8 @@ pub fn apply_theme(ctx: &egui::Context, dark_mode: bool) {
         style.visuals.panel_fill = DARK_CARD;
         style.visuals.extreme_bg_color = DARK_WIDGET_BG;
         style.visuals.widgets.noninteractive.bg_fill = DARK_CARD;
-        style.visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, DARK_TEXT_SECONDARY);
+        style.visuals.widgets.noninteractive.fg_stroke =
+            egui::Stroke::new(1.0, DARK_TEXT_SECONDARY);
         style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, DARK_CARD_BORDER);
         style.visuals.widgets.inactive.bg_fill = DARK_WIDGET_BG;
         style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, DARK_TEXT);
@@ -119,7 +148,8 @@ pub fn apply_theme(ctx: &egui::Context, dark_mode: bool) {
         style.visuals.panel_fill = LIGHT_CARD;
         style.visuals.extreme_bg_color = LIGHT_WIDGET_BG;
         style.visuals.widgets.noninteractive.bg_fill = LIGHT_CARD;
-        style.visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, LIGHT_TEXT_SECONDARY);
+        style.visuals.widgets.noninteractive.fg_stroke =
+            egui::Stroke::new(1.0, LIGHT_TEXT_SECONDARY);
         style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, LIGHT_CARD_BORDER);
         style.visuals.widgets.inactive.bg_fill = LIGHT_WIDGET_BG;
         style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, LIGHT_TEXT);

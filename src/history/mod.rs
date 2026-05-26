@@ -1,7 +1,8 @@
 pub mod types;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
-use types::{CleanSession, DeviceHistory, DiffResult};
+use types::{CleanSession, DeviceHistory};
 
 fn history_dir() -> PathBuf {
     let dir = dirs::config_dir()
@@ -48,32 +49,19 @@ pub fn create_history(serial: &str, brand: &str, model: &str, display_name: &str
     history
 }
 
-pub fn compute_diff(history: &DeviceHistory, current_apps: &[String]) -> DiffResult {
-    let last_session = history.sessions.last().cloned();
+/// Returns the set of packages that were uninstalled or disabled in any prior
+/// session but are present again in `current_apps`.
+pub fn reappeared_packages(history: &DeviceHistory, current_apps: &[String]) -> Vec<String> {
+    let previously_removed: HashSet<&str> = history
+        .sessions
+        .iter()
+        .flat_map(|s| s.apps_removed.iter().chain(s.apps_disabled.iter()))
+        .map(|s| s.as_str())
+        .collect();
 
-    if let Some(ref session) = last_session {
-        let previous: std::collections::HashSet<&str> = session
-            .apps_removed.iter()
-            .chain(session.apps_disabled.iter())
-            .map(|s| s.as_str())
-            .collect();
-
-        let new_apps: Vec<String> = current_apps
-            .iter()
-            .filter(|app| previous.contains(app.as_str()))
-            .cloned()
-            .collect();
-
-        DiffResult {
-            new_apps,
-            removed_apps: Vec::new(),
-            last_session: Some(session.clone()),
-        }
-    } else {
-        DiffResult {
-            new_apps: Vec::new(),
-            removed_apps: Vec::new(),
-            last_session: None,
-        }
-    }
+    current_apps
+        .iter()
+        .filter(|a| previously_removed.contains(a.as_str()))
+        .cloned()
+        .collect()
 }

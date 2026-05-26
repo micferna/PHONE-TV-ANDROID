@@ -15,10 +15,7 @@ pub fn list_packages(device_id: &str, filter: AppFilter) -> Vec<String> {
         .map(|output| {
             output
                 .lines()
-                .filter_map(|line| {
-                    line.strip_prefix("package:")
-                        .map(|s| s.trim().to_string())
-                })
+                .filter_map(|line| line.strip_prefix("package:").map(|s| s.trim().to_string()))
                 .filter(|s| !s.is_empty())
                 .collect()
         })
@@ -84,7 +81,10 @@ pub fn get_app_detail(device_id: &str, package: &str) -> Option<AppInfo> {
         if in_user0 {
             if let Some(pos) = trimmed.find("enabled=") {
                 let val = &trimmed[pos + 8..];
-                let enabled_val = val.split(|c: char| !c.is_ascii_digit()).next().unwrap_or("0");
+                let enabled_val = val
+                    .split(|c: char| !c.is_ascii_digit())
+                    .next()
+                    .unwrap_or("0");
                 // enabled=0 means default (enabled), enabled=1 means disabled by user,
                 // enabled=2 means disabled, enabled=3 means disabled by user
                 // Actually: 0=default(enabled), 1=enabled, 2=disabled, 3=disabled by user
@@ -212,7 +212,16 @@ pub fn uninstall_app(device_id: &str, package: &str) -> (bool, String) {
 
     // Fallback: `pm uninstall --user 0` (removes for current user, keeps on device)
     if let Ok(o) = Command::new("adb")
-        .args(["-s", device_id, "shell", "pm", "uninstall", "--user", "0", package])
+        .args([
+            "-s",
+            device_id,
+            "shell",
+            "pm",
+            "uninstall",
+            "--user",
+            "0",
+            package,
+        ])
         .output()
     {
         let stdout = String::from_utf8_lossy(&o.stdout).to_string();
@@ -226,7 +235,10 @@ pub fn uninstall_app(device_id: &str, package: &str) -> (bool, String) {
 }
 
 pub fn disable_app(device_id: &str, package: &str) -> (bool, String) {
-    match adb_device(device_id, &["shell", "pm", "disable-user", "--user", "0", package]) {
+    match adb_device(
+        device_id,
+        &["shell", "pm", "disable-user", "--user", "0", package],
+    ) {
         Some(output) => {
             let success = output.to_lowercase().contains("disabled");
             (success, output.trim().to_string())

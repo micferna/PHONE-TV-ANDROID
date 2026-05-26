@@ -62,18 +62,15 @@ pub fn add_entry(brand_name: &str, entry: BloatwareEntry) -> bool {
     save_brand(&db)
 }
 
-pub fn detect_brand(device_id: &str) -> Option<String> {
-    crate::adb::adb_device(device_id, &["shell", "getprop", "ro.product.brand"])
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty())
-}
-
 pub fn entries_for_profile<'a>(db: &'a BrandDb, profile: &CleanProfile) -> Vec<&'a BloatwareEntry> {
-    db.bloatware.iter().filter(|e| {
-        match profile {
+    db.bloatware
+        .iter()
+        .filter(|e| match profile {
             CleanProfile::Minimal => e.profile == CleanProfile::Minimal,
-            CleanProfile::Moderate => e.profile == CleanProfile::Minimal || e.profile == CleanProfile::Moderate,
+            CleanProfile::Moderate => {
+                e.profile == CleanProfile::Minimal || e.profile == CleanProfile::Moderate
+            }
             CleanProfile::Aggressive => true,
-        }
-    }).collect()
+        })
+        .collect()
 }

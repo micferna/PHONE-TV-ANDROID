@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Phone-TV
+Comment=Contrôle Android Phone & TV via ADB
+Exec=phone-tv
+Icon=phone-tv
+Terminal=false
+Type=Application
+Categories=Utility;Network;System;
+Keywords=adb;android;scrcpy;security;

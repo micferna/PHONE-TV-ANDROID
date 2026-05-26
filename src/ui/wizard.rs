@@ -1,17 +1,17 @@
-use eframe::egui;
 use crate::app::PhoneTvApp;
-use crate::theme;
-use crate::wizard;
-use crate::wizard::types::{WizardStep, CleanAction, VulnFix};
 use crate::brands::types::CleanProfile;
+use crate::theme;
 use crate::types::BgEvent;
+use crate::wizard;
+use crate::wizard::types::{CleanAction, VulnFix, WizardStep};
+use eframe::egui;
 
 pub fn draw_wizard(app: &mut PhoneTvApp, ctx: &egui::Context) {
     if !app.wizard.active {
         return;
     }
 
-    let screen = ctx.screen_rect();
+    let screen = ctx.content_rect();
 
     // Dark overlay background
     egui::Area::new(egui::Id::new("wizard_overlay"))
@@ -19,7 +19,8 @@ pub fn draw_wizard(app: &mut PhoneTvApp, ctx: &egui::Context) {
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             let (rect, _) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
-            ui.painter().rect_filled(rect, 0.0, egui::Color32::from_black_alpha(200));
+            ui.painter()
+                .rect_filled(rect, 0.0, egui::Color32::from_black_alpha(200));
         });
 
     // Wizard card
@@ -33,10 +34,10 @@ pub fn draw_wizard(app: &mut PhoneTvApp, ctx: &egui::Context) {
         .fixed_pos(card_pos)
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
-            egui::Frame::none()
+            egui::Frame::new()
                 .fill(theme::card_bg(app.dark_mode))
                 .stroke(egui::Stroke::new(1.0, theme::card_border(app.dark_mode)))
-                .rounding(12.0)
+                .corner_radius(12.0)
                 .inner_margin(20.0)
                 .show(ui, |ui| {
                     ui.set_min_size(card_size - egui::vec2(40.0, 40.0));
@@ -45,8 +46,9 @@ pub fn draw_wizard(app: &mut PhoneTvApp, ctx: &egui::Context) {
                     draw_header(app, ui);
                     ui.add_space(16.0);
 
-                    egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
-                        match app.wizard.step.clone() {
+                    egui::ScrollArea::vertical()
+                        .max_height(480.0)
+                        .show(ui, |ui| match app.wizard.step.clone() {
                             WizardStep::Detection => draw_step_detection(app, ui, ctx),
                             WizardStep::Scanning => draw_step_scanning(app, ui, ctx),
                             WizardStep::Pentest => draw_step_pentest(app, ui, ctx),
@@ -54,15 +56,18 @@ pub fn draw_wizard(app: &mut PhoneTvApp, ctx: &egui::Context) {
                             WizardStep::AiAnalysis => draw_step_ai(app, ui, ctx),
                             WizardStep::Cleaning => draw_step_cleaning(app, ui, ctx),
                             WizardStep::Report => draw_step_report(app, ui, ctx),
-                        }
-                    });
+                        });
                 });
         });
 }
 
 fn draw_header(app: &mut PhoneTvApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        ui.heading(egui::RichText::new("Assistant Nettoyage").size(20.0).strong());
+        ui.heading(
+            egui::RichText::new("Assistant Nettoyage")
+                .size(20.0)
+                .strong(),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("X Fermer").clicked() {
                 app.wizard.stop();
@@ -71,7 +76,15 @@ fn draw_header(app: &mut PhoneTvApp, ui: &mut egui::Ui) {
     });
 
     ui.add_space(8.0);
-    let steps = ["Detection", "Scan", "Pentest", "Profil", "IA", "Nettoyage", "Rapport"];
+    let steps = [
+        "Detection",
+        "Scan",
+        "Pentest",
+        "Profil",
+        "IA",
+        "Nettoyage",
+        "Rapport",
+    ];
     let current = match app.wizard.step {
         WizardStep::Detection => 0,
         WizardStep::Scanning => 1,
@@ -133,9 +146,9 @@ fn draw_step_detection(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Cont
     }
 
     if let Some(info) = &app.wizard.device_info.clone() {
-        egui::Frame::none()
+        egui::Frame::new()
             .fill(theme::widget_bg(app.dark_mode))
-            .rounding(8.0)
+            .corner_radius(8.0)
             .inner_margin(12.0)
             .show(ui, |ui| {
                 egui::Grid::new("device_info_grid")
@@ -143,19 +156,22 @@ fn draw_step_detection(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Cont
                     .spacing([16.0, 6.0])
                     .show(ui, |ui| {
                         ui.label(
-                            egui::RichText::new("Marque").color(theme::text_secondary(app.dark_mode)),
+                            egui::RichText::new("Marque")
+                                .color(theme::text_secondary(app.dark_mode)),
                         );
                         ui.label(egui::RichText::new(&info.brand).strong());
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Modele").color(theme::text_secondary(app.dark_mode)),
+                            egui::RichText::new("Modele")
+                                .color(theme::text_secondary(app.dark_mode)),
                         );
                         ui.label(egui::RichText::new(&info.model).strong());
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Android").color(theme::text_secondary(app.dark_mode)),
+                            egui::RichText::new("Android")
+                                .color(theme::text_secondary(app.dark_mode)),
                         );
                         ui.label(egui::RichText::new(&info.android_version).strong());
                         ui.end_row();
@@ -174,7 +190,8 @@ fn draw_step_detection(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Cont
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Serie").color(theme::text_secondary(app.dark_mode)),
+                            egui::RichText::new("Serie")
+                                .color(theme::text_secondary(app.dark_mode)),
                         );
                         ui.label(egui::RichText::new(&info.serial).strong());
                         ui.end_row();
@@ -184,9 +201,9 @@ fn draw_step_detection(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Cont
         // Show history info if available
         if let Some(history) = &app.wizard.history {
             ui.add_space(12.0);
-            egui::Frame::none()
+            egui::Frame::new()
                 .fill(theme::widget_bg(app.dark_mode))
-                .rounding(8.0)
+                .corner_radius(8.0)
                 .inner_margin(12.0)
                 .show(ui, |ui| {
                     ui.label(
@@ -211,7 +228,9 @@ fn draw_step_detection(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Cont
         ui.add_space(16.0);
         if ui
             .add(egui::Button::new(
-                egui::RichText::new("Lancer le scan complet").size(14.0).strong(),
+                egui::RichText::new("Lancer le scan complet")
+                    .size(14.0)
+                    .strong(),
             ))
             .clicked()
         {
@@ -235,16 +254,25 @@ fn draw_step_scanning(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Conte
         // Toujours afficher la barre
         if total > 0 {
             // Barre avec compteur dedans
-            let bar_text = format!("{} / {} applications ({:.0}%)", current, total, progress * 100.0);
-            ui.add(egui::ProgressBar::new(progress)
-                .text(bar_text)
-                .desired_width(ui.available_width()));
+            let bar_text = format!(
+                "{} / {} applications ({:.0}%)",
+                current,
+                total,
+                progress * 100.0
+            );
+            ui.add(
+                egui::ProgressBar::new(progress)
+                    .text(bar_text)
+                    .desired_width(ui.available_width()),
+            );
         } else {
             // Barre indéterminée animée pendant le chargement initial
-            ui.add(egui::ProgressBar::new(0.0)
-                .text("Recuperation de la liste des packages...")
-                .desired_width(ui.available_width())
-                .animate(true));
+            ui.add(
+                egui::ProgressBar::new(0.0)
+                    .text("Recuperation de la liste des packages...")
+                    .desired_width(ui.available_width())
+                    .animate(true),
+            );
         }
 
         ui.add_space(10.0);
@@ -286,10 +314,7 @@ fn draw_step_scanning(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Conte
             let tx = app.bg_tx.clone();
             wizard::trigger_scan(&device_id, &tx, ctx);
         } else {
-            ui.label(
-                egui::RichText::new("Aucun appareil connecte.")
-                    .color(theme::danger_color()),
-            );
+            ui.label(egui::RichText::new("Aucun appareil connecte.").color(theme::danger_color()));
         }
         ui.horizontal(|ui| {
             ui.spinner();
@@ -300,14 +325,12 @@ fn draw_step_scanning(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Conte
 
     // Show scan results
     if let Some((score, issues)) = &app.wizard.score_before {
-        egui::Frame::none()
+        egui::Frame::new()
             .fill(theme::widget_bg(app.dark_mode))
-            .rounding(8.0)
+            .corner_radius(8.0)
             .inner_margin(12.0)
             .show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new("Resultats du scan").size(14.0).strong(),
-                );
+                ui.label(egui::RichText::new("Resultats du scan").size(14.0).strong());
                 ui.add_space(4.0);
 
                 let score_color = if *score >= 70 {
@@ -327,7 +350,10 @@ fn draw_step_scanning(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Conte
                 ui.add_space(4.0);
                 ui.label(format!("Applications trouvees: {}", app.wizard.apps.len()));
                 ui.label(format!("Problemes detectes: {}", issues.len()));
-                ui.label(format!("Verifications posture: {}", app.wizard.posture.len()));
+                ui.label(format!(
+                    "Verifications posture: {}",
+                    app.wizard.posture.len()
+                ));
             });
 
         ui.add_space(8.0);
@@ -337,7 +363,10 @@ fn draw_step_scanning(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Conte
         );
 
         // Auto-trigger pentest
-        if !app.wizard.pentest_loading && app.wizard.vulns.is_empty() && app.wizard.risk_score.is_none() {
+        if !app.wizard.pentest_loading
+            && app.wizard.vulns.is_empty()
+            && app.wizard.risk_score.is_none()
+        {
             if let Some(device_id) = app.get_selected_id() {
                 app.wizard.pentest_loading = true;
                 let tx = app.bg_tx.clone();
@@ -383,9 +412,9 @@ fn draw_step_pentest(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
             theme::danger_color()
         };
 
-        egui::Frame::none()
+        egui::Frame::new()
             .fill(theme::widget_bg(app.dark_mode))
-            .rounding(8.0)
+            .corner_radius(8.0)
             .inner_margin(12.0)
             .show(ui, |ui| {
                 ui.label(
@@ -405,10 +434,7 @@ fn draw_step_pentest(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
                                 .strong(),
                         );
                     } else {
-                        ui.label(
-                            egui::RichText::new("Non roote")
-                                .color(theme::success_color()),
-                        );
+                        ui.label(egui::RichText::new("Non roote").color(theme::success_color()));
                     }
                     if root_status.bootloader_unlocked {
                         ui.label(
@@ -422,10 +448,15 @@ fn draw_step_pentest(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
                     match &root_status.rootable {
                         Some(true) => {
                             ui.label(
-                                egui::RichText::new(format!("Rootable: OUI — {}",
-                                    root_status.root_method.as_deref().unwrap_or("methode inconnue")))
-                                    .color(theme::accent_blue())
-                                    .strong(),
+                                egui::RichText::new(format!(
+                                    "Rootable: OUI — {}",
+                                    root_status
+                                        .root_method
+                                        .as_deref()
+                                        .unwrap_or("methode inconnue")
+                                ))
+                                .color(theme::accent_blue())
+                                .strong(),
                             );
                         }
                         Some(false) => {
@@ -437,7 +468,10 @@ fn draw_step_pentest(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
                         None => {
                             if !app.settings.openrouter_api_key.is_empty() {
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("Rootable: ?").color(theme::warning_color()));
+                                    ui.label(
+                                        egui::RichText::new("Rootable: ?")
+                                            .color(theme::warning_color()),
+                                    );
                                     if ui.button("Verifier via IA").clicked() {
                                         if let Some(ref info) = app.wizard.device_info.clone() {
                                             let api_key = app.settings.openrouter_api_key.clone();
@@ -449,23 +483,33 @@ fn draw_step_pentest(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
                                             let tx = app.bg_tx.clone();
                                             let ctx2 = ctx.clone();
                                             std::thread::spawn(move || {
-                                                match crate::llm::check_rootability(&api_key, &model, &brand, &dev_model, &android, &patch) {
+                                                match crate::llm::check_rootability(
+                                                    &api_key, &model, &brand, &dev_model, &android,
+                                                    &patch,
+                                                ) {
                                                     Ok(result) => {
                                                         let _ = tx.send(BgEvent::Log(format!(
                                                             "Rootable: {} (confiance: {}) — {}",
-                                                            if result.rootable { "OUI" } else { "NON" },
+                                                            if result.rootable {
+                                                                "OUI"
+                                                            } else {
+                                                                "NON"
+                                                            },
                                                             result.confidence,
                                                             result.details
                                                         )));
-                                                        let _ = tx.send(BgEvent::WizardRootabilityResult {
-                                                            rootable: result.rootable,
-                                                            method: result.method,
-                                                            confidence: result.confidence,
-                                                            details: result.details,
-                                                        });
+                                                        let _ = tx.send(
+                                                            BgEvent::WizardRootabilityResult {
+                                                                rootable: result.rootable,
+                                                                method: result.method,
+                                                                confidence: result.confidence,
+                                                                details: result.details,
+                                                            },
+                                                        );
                                                     }
                                                     Err(e) => {
-                                                        let _ = tx.send(BgEvent::LlmError { message: e });
+                                                        let _ = tx
+                                                            .send(BgEvent::LlmError { message: e });
                                                     }
                                                 }
                                                 ctx2.request_repaint();
@@ -475,8 +519,10 @@ fn draw_step_pentest(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
                                 });
                             } else {
                                 ui.label(
-                                    egui::RichText::new("Rootable: ? (configurez l'IA pour verifier)")
-                                        .color(theme::text_secondary(app.dark_mode)),
+                                    egui::RichText::new(
+                                        "Rootable: ? (configurez l'IA pour verifier)",
+                                    )
+                                    .color(theme::text_secondary(app.dark_mode)),
                                 );
                             }
                         }
@@ -487,9 +533,12 @@ fn draw_step_pentest(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
         if !app.wizard.vulns.is_empty() {
             ui.add_space(12.0);
             ui.label(
-                egui::RichText::new(format!("{} vulnerabilite(s) detectee(s)", app.wizard.vulns.len()))
-                    .size(14.0)
-                    .strong(),
+                egui::RichText::new(format!(
+                    "{} vulnerabilite(s) detectee(s)",
+                    app.wizard.vulns.len()
+                ))
+                .size(14.0)
+                .strong(),
             );
             ui.add_space(4.0);
 
@@ -500,9 +549,9 @@ fn draw_step_pentest(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
                     Severity::Warning => theme::warning_color(),
                     Severity::Info => theme::accent_blue(),
                 };
-                egui::Frame::none()
+                egui::Frame::new()
                     .fill(theme::widget_bg(app.dark_mode))
-                    .rounding(6.0)
+                    .corner_radius(6.0)
                     .inner_margin(8.0)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -547,7 +596,10 @@ fn draw_step_pentest(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
             .clicked()
         {
             // Build vuln fixes from patchable vulns
-            let vuln_fixes: Vec<VulnFix> = app.wizard.vulns.iter()
+            let vuln_fixes: Vec<VulnFix> = app
+                .wizard
+                .vulns
+                .iter()
                 .filter(|v| v.patchable && v.fix_action.is_some())
                 .map(|v| VulnFix {
                     vuln_id: v.id.clone(),
@@ -575,11 +627,44 @@ fn draw_step_profile(app: &mut PhoneTvApp, ui: &mut egui::Ui, _ctx: &egui::Conte
     ui.heading(egui::RichText::new("Profil de nettoyage").size(16.0));
     ui.add_space(8.0);
 
+    // Re-appeared apps warning (apps cleaned in a past session that are back)
+    if let Some(history) = &app.wizard.history {
+        let current: Vec<String> = app.wizard.apps.iter().map(|a| a.package.clone()).collect();
+        let reappeared = crate::history::reappeared_packages(history, &current);
+        if !reappeared.is_empty() {
+            egui::Frame::new()
+                .fill(theme::warning_color().linear_multiply(0.2))
+                .stroke(egui::Stroke::new(1.0, theme::warning_color()))
+                .corner_radius(8.0)
+                .inner_margin(10.0)
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "⚠ {} app(s) supprimée(s) précédemment sont réapparues",
+                            reappeared.len()
+                        ))
+                        .strong()
+                        .color(theme::warning_color()),
+                    );
+                    ui.label(
+                        egui::RichText::new(reappeared.join(", "))
+                            .size(11.0)
+                            .family(egui::FontFamily::Monospace),
+                    );
+                });
+            ui.add_space(8.0);
+        }
+    }
+
     // Profile selection buttons
     ui.horizontal(|ui| {
         let profiles = [
             (CleanProfile::Minimal, "Minimal", "Apps clairement inutiles"),
-            (CleanProfile::Moderate, "Modere", "Apps suspectes + inutiles"),
+            (
+                CleanProfile::Moderate,
+                "Modere",
+                "Apps suspectes + inutiles",
+            ),
             (CleanProfile::Aggressive, "Agressif", "Tout le bloatware"),
         ];
 
@@ -615,7 +700,11 @@ fn draw_step_profile(app: &mut PhoneTvApp, ui: &mut egui::Ui, _ctx: &egui::Conte
     ui.label(
         egui::RichText::new(format!(
             "{} action(s) selectionnee(s)",
-            app.wizard.clean_actions.iter().filter(|a| a.selected).count()
+            app.wizard
+                .clean_actions
+                .iter()
+                .filter(|a| a.selected)
+                .count()
         ))
         .size(14.0)
         .strong(),
@@ -695,7 +784,9 @@ fn draw_step_profile(app: &mut PhoneTvApp, ui: &mut egui::Ui, _ctx: &egui::Conte
 
         if ui
             .add(egui::Button::new(
-                egui::RichText::new("Lancer le nettoyage").size(14.0).strong(),
+                egui::RichText::new("Lancer le nettoyage")
+                    .size(14.0)
+                    .strong(),
             ))
             .clicked()
         {
@@ -710,9 +801,9 @@ fn draw_step_ai(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
     // Check API key
     if app.settings.openrouter_api_key.is_empty() {
-        egui::Frame::none()
+        egui::Frame::new()
             .fill(theme::widget_bg(app.dark_mode))
-            .rounding(8.0)
+            .corner_radius(8.0)
             .inner_margin(12.0)
             .show(ui, |ui| {
                 ui.label(
@@ -768,7 +859,9 @@ fn draw_step_ai(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
         if ui
             .add(egui::Button::new(
-                egui::RichText::new("Lancer l'analyse IA complete").size(14.0).strong(),
+                egui::RichText::new("Lancer l'analyse IA complete")
+                    .size(14.0)
+                    .strong(),
             ))
             .clicked()
         {
@@ -793,11 +886,17 @@ fn draw_step_ai(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     })
                     .collect();
 
-                let _ = tx.send(BgEvent::Log(format!("IA: analyse de {} apps...", app_data.len())));
+                let _ = tx.send(BgEvent::Log(format!(
+                    "IA: analyse de {} apps...",
+                    app_data.len()
+                )));
 
                 match crate::llm::analyze_all_apps(&api_key, &model, &app_data) {
                     Ok(verdicts) => {
-                        let _ = tx.send(BgEvent::Log(format!("IA: {} problemes detectes", verdicts.len())));
+                        let _ = tx.send(BgEvent::Log(format!(
+                            "IA: {} problemes detectes",
+                            verdicts.len()
+                        )));
                         let _ = tx.send(BgEvent::LlmAppVerdicts { verdicts });
                     }
                     Err(e) => {
@@ -822,19 +921,20 @@ fn draw_step_ai(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
     // Show verdicts
     ui.label(
-        egui::RichText::new(format!(
-            "{} verdict(s) recus",
-            app.wizard.ai_verdicts.len()
-        ))
-        .size(14.0)
-        .strong(),
+        egui::RichText::new(format!("{} verdict(s) recus", app.wizard.ai_verdicts.len()))
+            .size(14.0)
+            .strong(),
     );
     ui.add_space(8.0);
 
-    let verdicts_clone: Vec<(String, crate::llm::types::AppVerdict)> = app.wizard.ai_verdicts.clone();
+    let verdicts_clone: Vec<(String, crate::llm::types::AppVerdict)> =
+        app.wizard.ai_verdicts.clone();
     for (_, verdict) in &verdicts_clone {
         let v_lower = verdict.verdict.to_lowercase();
-        let verdict_color = if v_lower.contains("bloatware") || v_lower.contains("danger") || v_lower.contains("malware") {
+        let verdict_color = if v_lower.contains("bloatware")
+            || v_lower.contains("danger")
+            || v_lower.contains("malware")
+        {
             theme::danger_color()
         } else if v_lower.contains("suspect") || v_lower.contains("unknown") {
             theme::warning_color()
@@ -842,9 +942,9 @@ fn draw_step_ai(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             theme::success_color()
         };
 
-        egui::Frame::none()
+        egui::Frame::new()
             .fill(theme::widget_bg(app.dark_mode))
-            .rounding(6.0)
+            .corner_radius(6.0)
             .inner_margin(8.0)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -882,13 +982,25 @@ fn draw_step_ai(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         .clicked()
     {
         // Add bloatware verdicts as clean actions + update brands DB
-        let brand = app.wizard.device_info.as_ref().map(|i| i.brand.clone()).unwrap_or_default();
+        let brand = app
+            .wizard
+            .device_info
+            .as_ref()
+            .map(|i| i.brand.clone())
+            .unwrap_or_default();
         let mut new_entries = 0;
         for (_, verdict) in &app.wizard.ai_verdicts {
             let v_lower = verdict.verdict.to_lowercase();
-            if v_lower.contains("bloatware") || v_lower.contains("tracker") || v_lower.contains("suspect") {
+            if v_lower.contains("bloatware")
+                || v_lower.contains("tracker")
+                || v_lower.contains("suspect")
+            {
                 // Ajouter aux actions de nettoyage
-                let already_exists = app.wizard.clean_actions.iter().any(|a| a.package == verdict.package);
+                let already_exists = app
+                    .wizard
+                    .clean_actions
+                    .iter()
+                    .any(|a| a.package == verdict.package);
                 if !already_exists {
                     app.wizard.clean_actions.push(CleanAction {
                         package: verdict.package.clone(),
@@ -918,7 +1030,10 @@ fn draw_step_ai(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             }
         }
         if new_entries > 0 {
-            app.log(&format!("IA: {} nouveaux bloatwares ajoutes a la base {}", new_entries, brand));
+            app.log(&format!(
+                "IA: {} nouveaux bloatwares ajoutes a la base {}",
+                new_entries, brand
+            ));
         }
         app.wizard.step = WizardStep::Cleaning;
     }
@@ -930,47 +1045,68 @@ fn draw_step_cleaning(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Conte
 
     if !app.wizard.cleaning && app.wizard.clean_results.is_empty() {
         // Show recap before starting
-        let selected_actions = app.wizard.clean_actions.iter().filter(|a| a.selected).count();
+        let selected_actions = app
+            .wizard
+            .clean_actions
+            .iter()
+            .filter(|a| a.selected)
+            .count();
         let selected_fixes = app.wizard.vuln_fixes.iter().filter(|f| f.selected).count();
 
-        egui::Frame::none()
+        egui::Frame::new()
             .fill(theme::widget_bg(app.dark_mode))
-            .rounding(8.0)
+            .corner_radius(8.0)
             .inner_margin(12.0)
             .show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new("Recapitulatif").size(14.0).strong(),
-                );
+                ui.label(egui::RichText::new("Recapitulatif").size(14.0).strong());
                 ui.add_space(4.0);
-                ui.label(format!("{} application(s) a supprimer/desactiver", selected_actions));
-                ui.label(format!("{} correction(s) de securite a appliquer", selected_fixes));
+                ui.label(format!(
+                    "{} application(s) a supprimer/desactiver",
+                    selected_actions
+                ));
+                ui.label(format!(
+                    "{} correction(s) de securite a appliquer",
+                    selected_fixes
+                ));
                 ui.add_space(4.0);
                 ui.label(
-                    egui::RichText::new(
-                        "Cette operation ne peut pas etre annulee facilement.",
-                    )
-                    .size(12.0)
-                    .color(theme::warning_color()),
+                    egui::RichText::new("Cette operation ne peut pas etre annulee facilement.")
+                        .size(12.0)
+                        .color(theme::warning_color()),
                 );
             });
 
         ui.add_space(16.0);
         if ui
             .add(egui::Button::new(
-                egui::RichText::new("Lancer le nettoyage").size(14.0).strong(),
+                egui::RichText::new("Lancer le nettoyage")
+                    .size(14.0)
+                    .strong(),
             ))
             .clicked()
         {
             if let Some(device_id) = app.get_selected_id() {
-                let total = app.wizard.clean_actions.iter().filter(|a| a.selected).count()
+                let total = app
+                    .wizard
+                    .clean_actions
+                    .iter()
+                    .filter(|a| a.selected)
+                    .count()
                     + app.wizard.vuln_fixes.iter().filter(|f| f.selected).count();
                 app.wizard.clean_total = total;
                 app.wizard.clean_progress = 0;
                 app.wizard.cleaning = true;
 
                 let tx = app.bg_tx.clone();
+                let serial = app
+                    .wizard
+                    .device_info
+                    .as_ref()
+                    .map(|d| d.serial.clone())
+                    .unwrap_or_else(|| device_id.clone());
                 wizard::trigger_cleaning(
                     &device_id,
+                    &serial,
                     &app.wizard.clean_actions,
                     &app.wizard.vuln_fixes,
                     &tx,
@@ -984,10 +1120,17 @@ fn draw_step_cleaning(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Conte
     // Show progress
     if app.wizard.clean_total > 0 {
         let progress = app.wizard.clean_progress as f32 / app.wizard.clean_total as f32;
-        let bar_text = format!("{} / {} ({:.0}%)", app.wizard.clean_progress, app.wizard.clean_total, progress * 100.0);
-        ui.add(egui::ProgressBar::new(progress)
-            .text(bar_text)
-            .desired_width(ui.available_width()));
+        let bar_text = format!(
+            "{} / {} ({:.0}%)",
+            app.wizard.clean_progress,
+            app.wizard.clean_total,
+            progress * 100.0
+        );
+        ui.add(
+            egui::ProgressBar::new(progress)
+                .text(bar_text)
+                .desired_width(ui.available_width()),
+        );
         ui.add_space(8.0);
     }
 
@@ -1018,12 +1161,7 @@ fn draw_step_cleaning(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Conte
         };
 
         ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(icon)
-                    .size(11.0)
-                    .strong()
-                    .color(color),
-            );
+            ui.label(egui::RichText::new(icon).size(11.0).strong().color(color));
             ui.label(egui::RichText::new(&result.package).size(12.0));
             ui.label(
                 egui::RichText::new(format!("[{}]", result.action))
@@ -1046,21 +1184,33 @@ fn draw_step_report(app: &mut PhoneTvApp, ui: &mut egui::Ui, _ctx: &egui::Contex
     ui.add_space(8.0);
 
     // Scores
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(theme::widget_bg(app.dark_mode))
-        .rounding(8.0)
+        .corner_radius(8.0)
         .inner_margin(12.0)
         .show(ui, |ui| {
             ui.label(egui::RichText::new("Scores").size(14.0).strong());
             ui.add_space(4.0);
 
             if let Some((score_before, _)) = &app.wizard.score_before {
-                let score_after_val = app.wizard.score_after.as_ref().map(|(s, _)| *s).unwrap_or(*score_before);
+                let score_after_val = app
+                    .wizard
+                    .score_after
+                    .as_ref()
+                    .map(|(s, _)| *s)
+                    .unwrap_or(*score_before);
                 let diff: i32 = score_after_val as i32 - *score_before as i32;
-                let diff_color = if diff >= 0 { theme::success_color() } else { theme::danger_color() };
+                let diff_color = if diff >= 0 {
+                    theme::success_color()
+                } else {
+                    theme::danger_color()
+                };
 
                 ui.horizontal(|ui| {
-                    ui.label(format!("Score securite: {} -> {}", score_before, score_after_val));
+                    ui.label(format!(
+                        "Score securite: {} -> {}",
+                        score_before, score_after_val
+                    ));
                     ui.label(
                         egui::RichText::new(format!("({:+})", diff))
                             .color(diff_color)
@@ -1072,10 +1222,17 @@ fn draw_step_report(app: &mut PhoneTvApp, ui: &mut egui::Ui, _ctx: &egui::Contex
             if let Some(risk_before) = app.wizard.risk_score {
                 let risk_after = app.wizard.risk_score_after.unwrap_or(risk_before);
                 let diff: i32 = risk_after as i32 - risk_before as i32;
-                let diff_color = if diff >= 0 { theme::success_color() } else { theme::danger_color() };
+                let diff_color = if diff >= 0 {
+                    theme::success_color()
+                } else {
+                    theme::danger_color()
+                };
 
                 ui.horizontal(|ui| {
-                    ui.label(format!("Score de risque: {} -> {}", risk_before, risk_after));
+                    ui.label(format!(
+                        "Score de risque: {} -> {}",
+                        risk_before, risk_after
+                    ));
                     ui.label(
                         egui::RichText::new(format!("({:+})", diff))
                             .color(diff_color)
@@ -1088,12 +1245,22 @@ fn draw_step_report(app: &mut PhoneTvApp, ui: &mut egui::Ui, _ctx: &egui::Contex
     ui.add_space(8.0);
 
     // Success/failure counts
-    let successes = app.wizard.clean_results.iter().filter(|r| r.success).count();
-    let failures = app.wizard.clean_results.iter().filter(|r| !r.success).count();
+    let successes = app
+        .wizard
+        .clean_results
+        .iter()
+        .filter(|r| r.success)
+        .count();
+    let failures = app
+        .wizard
+        .clean_results
+        .iter()
+        .filter(|r| !r.success)
+        .count();
 
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(theme::widget_bg(app.dark_mode))
-        .rounding(8.0)
+        .corner_radius(8.0)
         .inner_margin(12.0)
         .show(ui, |ui| {
             ui.label(egui::RichText::new("Resultats").size(14.0).strong());
@@ -1111,73 +1278,142 @@ fn draw_step_report(app: &mut PhoneTvApp, ui: &mut egui::Ui, _ctx: &egui::Contex
         });
 
     // Apps removed/disabled summary
-    let removed: Vec<&str> = app.wizard.clean_results.iter()
+    let removed: Vec<&str> = app
+        .wizard
+        .clean_results
+        .iter()
         .filter(|r| r.success && r.action == "uninstall")
         .map(|r| r.package.as_str())
         .collect();
-    let disabled: Vec<&str> = app.wizard.clean_results.iter()
+    let disabled: Vec<&str> = app
+        .wizard
+        .clean_results
+        .iter()
         .filter(|r| r.success && r.action == "disable")
         .map(|r| r.package.as_str())
         .collect();
 
     if !removed.is_empty() || !disabled.is_empty() {
         ui.add_space(8.0);
-        egui::Frame::none()
+        egui::Frame::new()
             .fill(theme::widget_bg(app.dark_mode))
-            .rounding(8.0)
+            .corner_radius(8.0)
             .inner_margin(12.0)
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Applications traitees").size(14.0).strong());
+                ui.label(
+                    egui::RichText::new("Applications traitees")
+                        .size(14.0)
+                        .strong(),
+                );
                 ui.add_space(4.0);
                 if !removed.is_empty() {
                     ui.label(
-                        egui::RichText::new(format!("Supprimees ({}): {}", removed.len(), removed.join(", ")))
-                            .size(12.0)
-                            .color(theme::text_secondary(app.dark_mode)),
+                        egui::RichText::new(format!(
+                            "Supprimees ({}): {}",
+                            removed.len(),
+                            removed.join(", ")
+                        ))
+                        .size(12.0)
+                        .color(theme::text_secondary(app.dark_mode)),
                     );
                 }
                 if !disabled.is_empty() {
                     ui.label(
-                        egui::RichText::new(format!("Desactivees ({}): {}", disabled.len(), disabled.join(", ")))
-                            .size(12.0)
-                            .color(theme::text_secondary(app.dark_mode)),
+                        egui::RichText::new(format!(
+                            "Desactivees ({}): {}",
+                            disabled.len(),
+                            disabled.join(", ")
+                        ))
+                        .size(12.0)
+                        .color(theme::text_secondary(app.dark_mode)),
                     );
                 }
             });
     }
 
-    ui.add_space(16.0);
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        if ui
+            .add(egui::Button::new("📄 Exporter en Markdown").corner_radius(8.0))
+            .clicked()
+        {
+            let report = crate::wizard::report::build_markdown_report(&app.wizard);
+            let default_name = format!(
+                "phone-tv-rapport_{}.md",
+                chrono::Local::now().format("%Y%m%d_%H%M%S")
+            );
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Markdown", &["md"])
+                .set_file_name(&default_name)
+                .save_file()
+            {
+                match std::fs::write(&path, report) {
+                    Ok(_) => app.log(&format!("Rapport exporté: {}", path.display())),
+                    Err(e) => app.log(&format!("Erreur export: {}", e)),
+                }
+            }
+        }
+    });
+
+    ui.add_space(8.0);
     if ui
         .add(egui::Button::new(
-            egui::RichText::new("Sauvegarder et fermer").size(14.0).strong(),
+            egui::RichText::new("Sauvegarder et fermer")
+                .size(14.0)
+                .strong(),
         ))
         .clicked()
     {
         // Save to history
         if let Some(info) = &app.wizard.device_info.clone() {
-            let score_before = app.wizard.score_before.as_ref().map(|(s, _)| *s).unwrap_or(0);
-            let score_after = app.wizard.score_after.as_ref().map(|(s, _)| *s).unwrap_or(score_before);
+            let score_before = app
+                .wizard
+                .score_before
+                .as_ref()
+                .map(|(s, _)| *s)
+                .unwrap_or(0);
+            let score_after = app
+                .wizard
+                .score_after
+                .as_ref()
+                .map(|(s, _)| *s)
+                .unwrap_or(score_before);
             let risk_before = app.wizard.risk_score.unwrap_or(0);
             let risk_after = app.wizard.risk_score_after.unwrap_or(risk_before);
 
-            let apps_removed: Vec<String> = app.wizard.clean_results.iter()
+            let apps_removed: Vec<String> = app
+                .wizard
+                .clean_results
+                .iter()
                 .filter(|r| r.success && r.action == "uninstall")
                 .map(|r| r.package.clone())
                 .collect();
-            let apps_disabled: Vec<String> = app.wizard.clean_results.iter()
+            let apps_disabled: Vec<String> = app
+                .wizard
+                .clean_results
+                .iter()
                 .filter(|r| r.success && r.action == "disable")
                 .map(|r| r.package.clone())
                 .collect();
-            let apps_failed: Vec<String> = app.wizard.clean_results.iter()
+            let apps_failed: Vec<String> = app
+                .wizard
+                .clean_results
+                .iter()
                 .filter(|r| !r.success)
                 .map(|r| r.package.clone())
                 .collect();
 
             let vulns_found = app.wizard.vulns.len() as u32;
-            let vulns_patched = app.wizard.clean_results.iter()
+            let vulns_patched = app
+                .wizard
+                .clean_results
+                .iter()
                 .filter(|r| r.success && r.action == "fix")
                 .count() as u32;
-            let ai_suggestions_accepted = app.wizard.clean_actions.iter()
+            let ai_suggestions_accepted = app
+                .wizard
+                .clean_actions
+                .iter()
                 .filter(|a| a.from_ai && a.selected)
                 .count() as u32;
 

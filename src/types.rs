@@ -21,43 +21,140 @@ pub struct TransferState {
 pub enum BgEvent {
     DevicesLoaded(Vec<Device>),
     NetworkScanDone(Vec<String>),
-    WifiConnected { addr: String, success: bool },
+    WifiConnected {
+        addr: String,
+        success: bool,
+    },
+    WifiPaired {
+        addr: String,
+        success: bool,
+        message: String,
+    },
     WebcamSwitched(Option<Child>),
-    StorageInfo { device_id: String, total: String, used: String, avail: String, percent: f32 },
-    BatteryInfo { device_id: String, level: u8, status: String },
-    PhoneApps { device_id: String, apps: Vec<String> },
-    ScreenshotReady { device_id: String, data: Vec<u8> },
+    StorageInfo {
+        device_id: String,
+        total: String,
+        used: String,
+        avail: String,
+        percent: f32,
+    },
+    BatteryInfo {
+        device_id: String,
+        level: u8,
+        status: String,
+    },
+    PhoneApps {
+        device_id: String,
+        apps: Vec<String>,
+    },
+    ScreenshotReady {
+        device_id: String,
+        data: Vec<u8>,
+    },
+    ApkInstalled {
+        success: bool,
+        message: String,
+    },
+    FileTransferDone {
+        success: bool,
+        message: String,
+    },
     Log(String),
-    SecurityScore { score: u8, issues: Vec<SecurityIssue> },
-    SecurityAppsList { packages: Vec<String> },
-    SecurityAppDetail { package: String, info: AppInfo },
-    SecurityProcesses { processes: Vec<ProcessInfo> },
-    SecurityDataUsage { usage: Vec<DataUsage> },
-    SecurityWakelocks { wakelocks: Vec<WakelockInfo> },
-    SecurityPosture { checks: Vec<DevicePosture> },
-    SecurityPermissions { package: String, permissions: Vec<PermissionInfo> },
-    BlacklistAlert { found: Vec<String> },
-    AppActionResult { package: String, action: String, success: bool, message: String },
+    SecurityScore {
+        score: u8,
+        issues: Vec<SecurityIssue>,
+    },
+    SecurityAppsList {
+        packages: Vec<String>,
+    },
+    SecurityAppDetail {
+        package: String,
+        info: AppInfo,
+    },
+    SecurityProcesses {
+        processes: Vec<ProcessInfo>,
+    },
+    SecurityDataUsage {
+        usage: Vec<DataUsage>,
+    },
+    SecurityWakelocks {
+        wakelocks: Vec<WakelockInfo>,
+    },
+    SecurityPosture {
+        checks: Vec<DevicePosture>,
+    },
+    SecurityPermissions {
+        package: String,
+        permissions: Vec<PermissionInfo>,
+    },
+    BlacklistAlert {
+        found: Vec<String>,
+    },
+    AppActionResult {
+        package: String,
+        action: String,
+        success: bool,
+        message: String,
+    },
     SecurityAppsLoadingDone,
     // Wizard events
-    WizardDeviceDetected { info: DeviceInfo },
-    WizardScanProgress { current: usize, total: usize, package: String },
-    WizardScanComplete { apps: Vec<AppInfo>, posture: Vec<DevicePosture>, score: u8, issues: Vec<SecurityIssue> },
-    WizardPentestComplete { vulns: Vec<Vulnerability>, root: RootStatus, risk_score: u8 },
-    WizardCleanProgress { package: String, action: String, success: bool, message: String },
+    WizardDeviceDetected {
+        info: DeviceInfo,
+    },
+    WizardScanProgress {
+        current: usize,
+        total: usize,
+        package: String,
+    },
+    WizardScanComplete {
+        apps: Vec<AppInfo>,
+        posture: Vec<DevicePosture>,
+        score: u8,
+        issues: Vec<SecurityIssue>,
+    },
+    WizardPentestComplete {
+        vulns: Vec<Vulnerability>,
+        root: RootStatus,
+        risk_score: u8,
+    },
+    WizardCleanProgress {
+        package: String,
+        action: String,
+        success: bool,
+        message: String,
+    },
     WizardCleanComplete,
     // Model validation
-    LlmModelValid { valid: bool, model: String, error: Option<String> },
+    LlmModelValid {
+        valid: bool,
+        model: String,
+        error: Option<String>,
+    },
     // LLM events
-    LlmAppVerdicts { verdicts: Vec<AppVerdict> },
-    LlmPentestReport { vulns: Vec<Vulnerability> },
-    LlmError { message: String },
+    LlmAppVerdicts {
+        verdicts: Vec<AppVerdict>,
+    },
+    LlmPentestReport {
+        vulns: Vec<Vulnerability>,
+    },
+    LlmError {
+        message: String,
+    },
     // Rootability
-    WizardRootabilityResult { rootable: bool, method: Option<String>, confidence: String, details: String },
+    WizardRootabilityResult {
+        rootable: bool,
+        method: Option<String>,
+        confidence: String,
+        details: String,
+    },
     // Brands events
-    BrandsLoaded { db: BrandDb },
+    BrandsLoaded {
+        db: BrandDb,
+    },
     // History events
-    HistoryLoaded { history: Option<DeviceHistory> },
+    HistoryLoaded {
+        history: Option<DeviceHistory>,
+    },
 }
 
 #[derive(Clone, PartialEq)]
@@ -200,7 +297,6 @@ pub enum SecurityView {
     Blacklist,
     Monitoring,
     Posture,
-    Cleaning,
 }
 
 #[derive(Clone, Copy, PartialEq)]

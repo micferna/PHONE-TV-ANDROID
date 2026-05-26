@@ -27,10 +27,3 @@ pub struct CleanSession {
     pub profile_used: String,
     pub ai_suggestions_accepted: u32,
 }
-
-#[derive(Clone, Debug)]
-pub struct DiffResult {
-    pub new_apps: Vec<String>,
-    pub removed_apps: Vec<String>,
-    pub last_session: Option<CleanSession>,
-}

@@ -1,14 +1,16 @@
+pub mod report;
 pub mod types;
 
-use std::sync::mpsc;
-use eframe::egui;
 use crate::adb;
+use crate::backup;
 use crate::brands;
 use crate::history;
 use crate::pentest;
-use crate::security::{apps, score, posture};
+use crate::security::{apps, posture, score};
 use crate::types::*;
-use types::{DeviceInfo, WizardState, WizardStep, CleanAction, VulnFix};
+use eframe::egui;
+use std::sync::mpsc;
+use types::{CleanAction, DeviceInfo, VulnFix, WizardState, WizardStep};
 
 impl WizardState {
     pub fn start(&mut self) {
@@ -26,20 +28,37 @@ impl WizardState {
 
 pub fn detect_device(device_id: &str) -> Option<DeviceInfo> {
     let serial = adb::adb_device(device_id, &["shell", "getprop", "ro.serialno"])?
-        .trim().to_string();
+        .trim()
+        .to_string();
     let brand = adb::adb_device(device_id, &["shell", "getprop", "ro.product.brand"])?
-        .trim().to_lowercase();
+        .trim()
+        .to_lowercase();
     let model = adb::adb_device(device_id, &["shell", "getprop", "ro.product.model"])?
-        .trim().to_string();
-    let android_version = adb::adb_device(device_id, &["shell", "getprop", "ro.build.version.release"])?
-        .trim().to_string();
+        .trim()
+        .to_string();
+    let android_version =
+        adb::adb_device(device_id, &["shell", "getprop", "ro.build.version.release"])?
+            .trim()
+            .to_string();
     let sdk: u32 = adb::adb_device(device_id, &["shell", "getprop", "ro.build.version.sdk"])?
-        .trim().parse().unwrap_or(0);
-    let security_patch = adb::adb_device(device_id, &["shell", "getprop", "ro.build.version.security_patch"])?
-        .trim().to_string();
+        .trim()
+        .parse()
+        .unwrap_or(0);
+    let security_patch = adb::adb_device(
+        device_id,
+        &["shell", "getprop", "ro.build.version.security_patch"],
+    )?
+    .trim()
+    .to_string();
 
-    let display_name = format!("{} {}",
-        brand.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default() + &brand[1..],
+    let display_name = format!(
+        "{} {}",
+        brand
+            .chars()
+            .next()
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_default()
+            + &brand[1..],
         model
     );
 
@@ -77,19 +96,31 @@ pub fn trigger_scan(device_id: &str, tx: &mpsc::Sender<BgEvent>, ctx: &egui::Con
     let ctx = ctx.clone();
     std::thread::spawn(move || {
         // Envoyer un signal immédiat pour montrer que ça démarre
-        let _ = tx.send(BgEvent::WizardScanProgress { current: 0, total: 0, package: "Chargement de la liste...".into() });
+        let _ = tx.send(BgEvent::WizardScanProgress {
+            current: 0,
+            total: 0,
+            package: "Chargement de la liste...".into(),
+        });
         ctx.request_repaint();
 
         let all_packages = apps::list_packages(&id, AppFilter::All);
         let total = all_packages.len();
 
         // Envoyer le total dès qu'on l'a
-        let _ = tx.send(BgEvent::WizardScanProgress { current: 0, total, package: "Demarrage de l'analyse...".into() });
+        let _ = tx.send(BgEvent::WizardScanProgress {
+            current: 0,
+            total,
+            package: "Demarrage de l'analyse...".into(),
+        });
         ctx.request_repaint();
 
         let mut app_infos = Vec::new();
         for (i, pkg) in all_packages.iter().enumerate() {
-            let _ = tx.send(BgEvent::WizardScanProgress { current: i + 1, total, package: pkg.clone() });
+            let _ = tx.send(BgEvent::WizardScanProgress {
+                current: i + 1,
+                total,
+                package: pkg.clone(),
+            });
             ctx.request_repaint();
             if let Some(info) = apps::get_app_detail(&id, pkg) {
                 app_infos.push(info);
@@ -150,7 +181,11 @@ pub fn build_clean_actions(
     if let Some(db) = brand_db {
         for app in apps {
             let is_known = db.bloatware.iter().any(|e| e.package == app.package);
-            let matches_prefix = db.meta.prefixes.iter().any(|p| app.package.starts_with(p.as_str()));
+            let matches_prefix = db
+                .meta
+                .prefixes
+                .iter()
+                .any(|p| app.package.starts_with(p.as_str()));
             if !is_known && !matches_prefix && app.installer == AppInstaller::Unknown {
                 unknown.push(app.package.clone());
             }
@@ -162,18 +197,48 @@ pub fn build_clean_actions(
 
 pub fn trigger_cleaning(
     device_id: &str,
+    serial: &str,
     actions: &[CleanAction],
     vuln_fixes: &[VulnFix],
     tx: &mpsc::Sender<BgEvent>,
     ctx: &egui::Context,
 ) {
     let id = device_id.to_string();
+    let serial = serial.to_string();
     let tx = tx.clone();
     let ctx = ctx.clone();
     let actions: Vec<CleanAction> = actions.iter().filter(|a| a.selected).cloned().collect();
     let fixes: Vec<VulnFix> = vuln_fixes.iter().filter(|f| f.selected).cloned().collect();
 
     std::thread::spawn(move || {
+        // Backup APKs of apps to be uninstalled (disable is reversible via pm enable)
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+        let backup_dir = backup::session_dir(&serial, &timestamp);
+        let mut manifest = backup::BackupManifest {
+            serial: serial.clone(),
+            timestamp: timestamp.clone(),
+            apks: Vec::new(),
+        };
+        for action in actions.iter().filter(|a| a.action == "uninstall") {
+            if let Some(local) = backup::backup_apk(&id, &action.package, &backup_dir) {
+                if let Some(file) = local.file_name() {
+                    manifest.apks.push(backup::BackedUpApk {
+                        package: action.package.clone(),
+                        file: file.to_string_lossy().to_string(),
+                    });
+                }
+            }
+        }
+        if !manifest.apks.is_empty() {
+            backup::write_manifest(&backup_dir, &manifest);
+            let _ = tx.send(BgEvent::Log(format!(
+                "Sauvegarde: {} APK(s) dans {}",
+                manifest.apks.len(),
+                backup_dir.display()
+            )));
+            ctx.request_repaint();
+        }
+
         for action in &actions {
             let (success, message) = match action.action.as_str() {
                 "uninstall" => apps::uninstall_app(&id, &action.package),

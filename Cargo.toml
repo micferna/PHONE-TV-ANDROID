@@ -4,6 +4,10 @@ version = "5.0.0"
 edition = "2021"
 description = "Contrôle Android Phone & TV via ADB"
 authors = ["OCB"]
+license = "MIT"
+repository = "https://github.com/micferna/PHONE-TV-ANDROID"
+readme = "README.md"
+autobenches = false
 
 [dependencies]
 eframe = "0.33"
@@ -12,8 +16,36 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 dirs = "6.0"
 anyhow = "1.0"
 rfd = "0.17"
+arboard = "3"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 chrono = "0.4"
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking", "gzip", "brotli", "deflate"] }
 serde_json = "1"
+
+[[bin]]
+name = "phone-tv"
+path = "src/main.rs"
+
+[[bin]]
+name = "bench-micro"
+path = "benches/micro.rs"
+
+[package.metadata.deb]
+maintainer = "OCB"
+copyright = "2026, OCB"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+Application de bureau Rust pour contrôler téléphones et TV Android via ADB.
+Inclut streaming webcam, mirroring, télécommande TV, audit de sécurité IA,
+nettoyage de bloatware avec sauvegarde, et bien plus."""
+depends = "adb, scrcpy"
+recommends = "v4l2loopback-dkms"
+section = "utility"
+priority = "optional"
+assets = [
+    ["target/release/phone-tv", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/phone-tv/README.md", "644"],
+    ["assets/phone-tv.desktop", "usr/share/applications/phone-tv.desktop", "644"],
+    ["setup-webcam.sh", "usr/share/phone-tv/setup-webcam.sh", "755"],
+]

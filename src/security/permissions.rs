@@ -126,9 +126,7 @@ pub fn get_app_permissions(device_id: &str, package: &str) -> Vec<PermissionInfo
                     let name = trimmed[..colon_pos].trim().to_string();
                     let granted = trimmed.contains("granted=true");
 
-                    let short_name = name
-                        .strip_prefix("android.permission.")
-                        .unwrap_or(&name);
+                    let short_name = name.strip_prefix("android.permission.").unwrap_or(&name);
                     let dangerous = DANGEROUS_PERMISSIONS.contains(&short_name);
 
                     permissions.push(PermissionInfo {
@@ -163,10 +161,7 @@ pub fn get_app_permissions(device_id: &str, package: &str) -> Vec<PermissionInfo
             if let Some(time_pos) = trimmed.find("time=") {
                 let time_part = &trimmed[time_pos + 5..];
                 // Extract until space or end
-                let time_val = time_part
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or(time_part);
+                let time_val = time_part.split_whitespace().next().unwrap_or(time_part);
 
                 if let Some(human) = parse_appops_time(time_val) {
                     if let Some(ref op) = current_op {
@@ -190,7 +185,9 @@ pub fn get_app_permissions(device_id: &str, package: &str) -> Vec<PermissionInfo
 
 pub fn revoke_permission(device_id: &str, package: &str, permission: &str) -> (bool, String) {
     match Command::new("adb")
-        .args(["-s", device_id, "shell", "pm", "revoke", package, permission])
+        .args([
+            "-s", device_id, "shell", "pm", "revoke", package, permission,
+        ])
         .output()
     {
         Ok(o) => {
@@ -200,7 +197,14 @@ pub fn revoke_permission(device_id: &str, package: &str, permission: &str) -> (b
             } else {
                 String::from_utf8_lossy(&o.stderr).trim().to_string()
             };
-            (success, if msg.is_empty() { "OK".to_string() } else { msg })
+            (
+                success,
+                if msg.is_empty() {
+                    "OK".to_string()
+                } else {
+                    msg
+                },
+            )
         }
         Err(e) => (false, format!("Erreur: {}", e)),
     }
