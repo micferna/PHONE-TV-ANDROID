@@ -1,7 +1,7 @@
 pub mod prompts;
 pub mod types;
 
-use types::{AppVerdict, LlmVuln};
+use types::AppVerdict;
 
 pub fn call_openrouter(api_key: &str, model: &str, prompt: &str) -> Result<String, String> {
     let client = reqwest::blocking::Client::builder()
@@ -27,14 +27,25 @@ pub fn call_openrouter(api_key: &str, model: &str, prompt: &str) -> Result<Strin
         .map_err(|e| format!("Erreur reseau: {}", e))?;
 
     let status = resp.status();
-    let body_text = resp.text().map_err(|e| format!("Erreur lecture reponse: {}", e))?;
+    let body_text = resp
+        .text()
+        .map_err(|e| format!("Erreur lecture reponse: {}", e))?;
 
     if !status.is_success() {
-        return Err(format!("Erreur API {}: {}", status, &body_text[..500.min(body_text.len())]));
+        return Err(format!(
+            "Erreur API {}: {}",
+            status,
+            &body_text[..500.min(body_text.len())]
+        ));
     }
 
-    let json: serde_json::Value = serde_json::from_str(&body_text)
-        .map_err(|e| format!("Erreur parsing reponse API: {} — debut: {}", e, &body_text[..300.min(body_text.len())]))?;
+    let json: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| {
+        format!(
+            "Erreur parsing reponse API: {} — debut: {}",
+            e,
+            &body_text[..300.min(body_text.len())]
+        )
+    })?;
 
     let message = &json["choices"][0]["message"];
 
@@ -50,36 +61,45 @@ pub fn call_openrouter(api_key: &str, model: &str, prompt: &str) -> Result<Strin
         }
     }
     if let Some(details) = message["reasoning_details"].as_array() {
-        let texts: Vec<&str> = details.iter()
-            .filter_map(|d| d["text"].as_str())
-            .collect();
+        let texts: Vec<&str> = details.iter().filter_map(|d| d["text"].as_str()).collect();
         if !texts.is_empty() {
             return Ok(texts.join(""));
         }
     }
 
-    Err(format!("Reponse vide du LLM: {}", &body_text[..500.min(body_text.len())]))
+    Err(format!(
+        "Reponse vide du LLM: {}",
+        &body_text[..500.min(body_text.len())]
+    ))
 }
 
 /// Analyse COMPLETE de toutes les apps par l'IA — pas juste les inconnues
-pub fn analyze_all_apps(api_key: &str, model: &str, apps: &[(String, Vec<String>, String)]) -> Result<Vec<AppVerdict>, String> {
+pub fn analyze_all_apps(
+    api_key: &str,
+    model: &str,
+    apps: &[(String, Vec<String>, String)],
+) -> Result<Vec<AppVerdict>, String> {
     let prompt = prompts::full_analysis_prompt(apps);
     let response = call_openrouter(api_key, model, &prompt)?;
     let json_str = extract_json_array(&response);
 
-    serde_json::from_str::<Vec<AppVerdict>>(json_str)
-        .map_err(|e| format!("Erreur parsing IA: {} — extrait: {}", e, &json_str[..200.min(json_str.len())]))
+    serde_json::from_str::<Vec<AppVerdict>>(json_str).map_err(|e| {
+        format!(
+            "Erreur parsing IA: {} — extrait: {}",
+            e,
+            &json_str[..200.min(json_str.len())]
+        )
+    })
 }
 
-pub fn analyze_pentest(api_key: &str, model: &str, prompt: &str) -> Result<Vec<LlmVuln>, String> {
-    let response = call_openrouter(api_key, model, prompt)?;
-    let json_str = extract_json_array(&response);
-
-    serde_json::from_str::<Vec<LlmVuln>>(json_str)
-        .map_err(|e| format!("Erreur parsing pentest: {}", e))
-}
-
-pub fn check_rootability(api_key: &str, model: &str, brand: &str, device_model: &str, android_version: &str, security_patch: &str) -> Result<types::RootabilityResult, String> {
+pub fn check_rootability(
+    api_key: &str,
+    model: &str,
+    brand: &str,
+    device_model: &str,
+    android_version: &str,
+    security_patch: &str,
+) -> Result<types::RootabilityResult, String> {
     let prompt = prompts::rootability_prompt(brand, device_model, android_version, security_patch);
     let response = call_openrouter(api_key, model, &prompt)?;
     let json_str = extract_json_object(&response);
@@ -109,14 +129,18 @@ pub fn validate_model(api_key: &str, model: &str) -> Result<bool, String> {
         .map_err(|e| format!("Erreur reseau: {}", e))?;
 
     let status = resp.status();
-    let body_text = resp.text().unwrap_or_default();
 
     if status.is_success() {
         Ok(true)
     } else if status.as_u16() == 401 {
         Err("Cle API invalide".to_string())
     } else {
-        Err(format!("Modele '{}' — erreur {}", model, status))
+        let body_text = resp.text().unwrap_or_default();
+        let snippet = &body_text[..200.min(body_text.len())];
+        Err(format!(
+            "Modele '{}' — erreur {}: {}",
+            model, status, snippet
+        ))
     }
 }
 

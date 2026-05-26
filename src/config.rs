@@ -61,30 +61,102 @@ fn channels_path() -> PathBuf {
 
 pub fn default_channels() -> Vec<TvChannel> {
     vec![
-        TvChannel { name: "TF1".into(), number: 1 },
-        TvChannel { name: "France 2".into(), number: 2 },
-        TvChannel { name: "France 3".into(), number: 3 },
-        TvChannel { name: "France 4".into(), number: 4 },
-        TvChannel { name: "France 5".into(), number: 5 },
-        TvChannel { name: "M6".into(), number: 6 },
-        TvChannel { name: "Arte".into(), number: 7 },
-        TvChannel { name: "LCP".into(), number: 8 },
-        TvChannel { name: "W9".into(), number: 9 },
-        TvChannel { name: "TMC".into(), number: 10 },
-        TvChannel { name: "TFX".into(), number: 11 },
-        TvChannel { name: "Gulli".into(), number: 12 },
-        TvChannel { name: "BFMTV".into(), number: 13 },
-        TvChannel { name: "CNEWS".into(), number: 14 },
-        TvChannel { name: "LCI".into(), number: 15 },
-        TvChannel { name: "FranceInfo".into(), number: 16 },
-        TvChannel { name: "CSTAR".into(), number: 17 },
-        TvChannel { name: "CMI TV".into(), number: 18 },
-        TvChannel { name: "TF1 SF".into(), number: 20 },
-        TvChannel { name: "L'Équipe".into(), number: 21 },
-        TvChannel { name: "6ter".into(), number: 22 },
-        TvChannel { name: "RMC Story".into(), number: 23 },
-        TvChannel { name: "RMC Déc".into(), number: 24 },
-        TvChannel { name: "Chérie 25".into(), number: 25 },
+        TvChannel {
+            name: "TF1".into(),
+            number: 1,
+        },
+        TvChannel {
+            name: "France 2".into(),
+            number: 2,
+        },
+        TvChannel {
+            name: "France 3".into(),
+            number: 3,
+        },
+        TvChannel {
+            name: "France 4".into(),
+            number: 4,
+        },
+        TvChannel {
+            name: "France 5".into(),
+            number: 5,
+        },
+        TvChannel {
+            name: "M6".into(),
+            number: 6,
+        },
+        TvChannel {
+            name: "Arte".into(),
+            number: 7,
+        },
+        TvChannel {
+            name: "LCP".into(),
+            number: 8,
+        },
+        TvChannel {
+            name: "W9".into(),
+            number: 9,
+        },
+        TvChannel {
+            name: "TMC".into(),
+            number: 10,
+        },
+        TvChannel {
+            name: "TFX".into(),
+            number: 11,
+        },
+        TvChannel {
+            name: "Gulli".into(),
+            number: 12,
+        },
+        TvChannel {
+            name: "BFMTV".into(),
+            number: 13,
+        },
+        TvChannel {
+            name: "CNEWS".into(),
+            number: 14,
+        },
+        TvChannel {
+            name: "LCI".into(),
+            number: 15,
+        },
+        TvChannel {
+            name: "FranceInfo".into(),
+            number: 16,
+        },
+        TvChannel {
+            name: "CSTAR".into(),
+            number: 17,
+        },
+        TvChannel {
+            name: "CMI TV".into(),
+            number: 18,
+        },
+        TvChannel {
+            name: "TF1 SF".into(),
+            number: 20,
+        },
+        TvChannel {
+            name: "L'Équipe".into(),
+            number: 21,
+        },
+        TvChannel {
+            name: "6ter".into(),
+            number: 22,
+        },
+        TvChannel {
+            name: "RMC Story".into(),
+            number: 23,
+        },
+        TvChannel {
+            name: "RMC Déc".into(),
+            number: 24,
+        },
+        TvChannel {
+            name: "Chérie 25".into(),
+            number: 25,
+        },
     ]
 }
 
@@ -93,16 +165,14 @@ pub fn load_channels() -> Vec<TvChannel> {
     if let Ok(file) = std::fs::File::open(&path) {
         let reader = std::io::BufReader::new(file);
         let mut channels = Vec::new();
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                let line = line.trim().to_string();
-                if let Some((num_str, name)) = line.split_once(':') {
-                    if let Ok(number) = num_str.parse::<u32>() {
-                        channels.push(TvChannel {
-                            name: name.to_string(),
-                            number,
-                        });
-                    }
+        for line in reader.lines().map_while(Result::ok) {
+            let line = line.trim().to_string();
+            if let Some((num_str, name)) = line.split_once(':') {
+                if let Ok(number) = num_str.parse::<u32>() {
+                    channels.push(TvChannel {
+                        name: name.to_string(),
+                        number,
+                    });
                 }
             }
         }

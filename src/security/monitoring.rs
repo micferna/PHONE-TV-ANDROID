@@ -268,7 +268,7 @@ pub fn get_wakelocks(device_id: &str) -> Vec<WakelockInfo> {
         });
     }
 
-    wakelocks.sort_by(|a, b| b.duration_ms.cmp(&a.duration_ms));
+    wakelocks.sort_by_key(|w| std::cmp::Reverse(w.duration_ms));
     wakelocks
 }
 
@@ -319,7 +319,11 @@ fn parse_duration_from_line(line: &str) -> Option<u64> {
         i += 1;
     }
 
-    if found_any { Some(total_ms) } else { None }
+    if found_any {
+        Some(total_ms)
+    } else {
+        None
+    }
 }
 
 fn extract_package_from_line(line: &str) -> Option<String> {

@@ -6,7 +6,16 @@ pub fn calculate_score(device_id: &str) -> (u8, Vec<SecurityIssue>) {
     let mut deductions: i32 = 0;
 
     // 1. Developer mode (info only — required for this app)
-    if let Some(val) = adb_device(device_id, &["shell", "settings", "get", "global", "development_settings_enabled"]) {
+    if let Some(val) = adb_device(
+        device_id,
+        &[
+            "shell",
+            "settings",
+            "get",
+            "global",
+            "development_settings_enabled",
+        ],
+    ) {
         if val.trim() == "1" {
             issues.push(SecurityIssue {
                 id: "dev_mode".into(),
@@ -20,7 +29,16 @@ pub fn calculate_score(device_id: &str) -> (u8, Vec<SecurityIssue>) {
     }
 
     // 2. Play Protect (-25)
-    if let Some(val) = adb_device(device_id, &["shell", "settings", "get", "global", "package_verifier_enable"]) {
+    if let Some(val) = adb_device(
+        device_id,
+        &[
+            "shell",
+            "settings",
+            "get",
+            "global",
+            "package_verifier_enable",
+        ],
+    ) {
         let trimmed = val.trim();
         if trimmed == "0" || trimmed == "null" {
             deductions += 25;
@@ -36,7 +54,16 @@ pub fn calculate_score(device_id: &str) -> (u8, Vec<SecurityIssue>) {
     }
 
     // 3. Unknown sources (-20)
-    if let Some(val) = adb_device(device_id, &["shell", "settings", "get", "secure", "install_non_market_apps"]) {
+    if let Some(val) = adb_device(
+        device_id,
+        &[
+            "shell",
+            "settings",
+            "get",
+            "secure",
+            "install_non_market_apps",
+        ],
+    ) {
         let trimmed = val.trim();
         if trimmed == "1" {
             deductions += 20;
@@ -53,7 +80,16 @@ pub fn calculate_score(device_id: &str) -> (u8, Vec<SecurityIssue>) {
     }
 
     // 4. Accessibility services (-15 cap)
-    if let Some(val) = adb_device(device_id, &["shell", "settings", "get", "secure", "enabled_accessibility_services"]) {
+    if let Some(val) = adb_device(
+        device_id,
+        &[
+            "shell",
+            "settings",
+            "get",
+            "secure",
+            "enabled_accessibility_services",
+        ],
+    ) {
         let trimmed = val.trim();
         if !trimmed.is_empty() && trimmed != "null" {
             deductions += 15;
@@ -93,8 +129,16 @@ pub fn calculate_score(device_id: &str) -> (u8, Vec<SecurityIssue>) {
             deductions += penalty;
             issues.push(SecurityIssue {
                 id: "sideloaded".into(),
-                description: format!("{} app(s) non Play Store: {}", sideloaded_count,
-                    sideloaded_names.iter().take(5).cloned().collect::<Vec<_>>().join(", ")),
+                description: format!(
+                    "{} app(s) non Play Store: {}",
+                    sideloaded_count,
+                    sideloaded_names
+                        .iter()
+                        .take(5)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
                 severity: Severity::Warning,
                 points: -penalty,
                 fixable: false,
@@ -106,7 +150,8 @@ pub fn calculate_score(device_id: &str) -> (u8, Vec<SecurityIssue>) {
     // 6. Dangerous permissions apps (-2 each, max -10)
     // Get third-party packages
     if let Some(output) = adb_device(device_id, &["shell", "pm", "list", "packages", "-3"]) {
-        let packages: Vec<String> = output.lines()
+        let packages: Vec<String> = output
+            .lines()
             .filter_map(|l| l.strip_prefix("package:").map(|s| s.trim().to_string()))
             .collect();
 
@@ -122,11 +167,13 @@ pub fn calculate_score(device_id: &str) -> (u8, Vec<SecurityIssue>) {
                         continue;
                     }
                     if in_runtime_perms {
-                        if trimmed.is_empty() || (!trimmed.starts_with("android.permission.") && !trimmed.starts_with("com.")) {
-                            if !trimmed.contains("granted=") {
-                                in_runtime_perms = false;
-                                continue;
-                            }
+                        if (trimmed.is_empty()
+                            || (!trimmed.starts_with("android.permission.")
+                                && !trimmed.starts_with("com.")))
+                            && !trimmed.contains("granted=")
+                        {
+                            in_runtime_perms = false;
+                            continue;
                         }
                         if trimmed.contains("granted=true") {
                             granted_count += 1;
@@ -145,8 +192,16 @@ pub fn calculate_score(device_id: &str) -> (u8, Vec<SecurityIssue>) {
             deductions += penalty;
             issues.push(SecurityIssue {
                 id: "dangerous_perms".into(),
-                description: format!("{} app(s) avec 3+ permissions dangereuses: {}",
-                    count, dangerous_apps.iter().take(5).cloned().collect::<Vec<_>>().join(", ")),
+                description: format!(
+                    "{} app(s) avec 3+ permissions dangereuses: {}",
+                    count,
+                    dangerous_apps
+                        .iter()
+                        .take(5)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
                 severity: Severity::Info,
                 points: -penalty,
                 fixable: false,

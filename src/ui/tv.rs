@@ -36,9 +36,13 @@ fn tv_btn(ui: &mut egui::Ui, label: &str, size: [f32; 2]) -> bool {
 fn tv_btn_fill(ui: &mut egui::Ui, label: &str, size: [f32; 2], fill: egui::Color32) -> bool {
     ui.add_sized(
         size,
-        egui::Button::new(egui::RichText::new(label).size(13.0).color(egui::Color32::WHITE))
-            .fill(fill)
-            .corner_radius(8.0),
+        egui::Button::new(
+            egui::RichText::new(label)
+                .size(13.0)
+                .color(egui::Color32::WHITE),
+        )
+        .fill(fill)
+        .corner_radius(8.0),
     )
     .clicked()
 }
@@ -68,7 +72,12 @@ pub fn draw_tv(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             ui.add(
                 egui::ProgressBar::new(percent)
-                    .text(egui::RichText::new(text).strong().size(12.0).color(egui::Color32::WHITE))
+                    .text(
+                        egui::RichText::new(text)
+                            .strong()
+                            .size(12.0)
+                            .color(egui::Color32::WHITE),
+                    )
                     .fill(color)
                     .corner_radius(8.0),
             );
@@ -96,23 +105,68 @@ pub fn draw_tv(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     .spacing([3.0, 3.0])
                     .show(ui, |ui| {
                         ui.label("");
-                        if ui.add_sized(dpad_size, egui::Button::new(egui::RichText::new("▲").size(18.0)).fill(dpad_fill).corner_radius(8.0)).clicked() {
+                        if ui
+                            .add_sized(
+                                dpad_size,
+                                egui::Button::new(egui::RichText::new("▲").size(18.0))
+                                    .fill(dpad_fill)
+                                    .corner_radius(8.0),
+                            )
+                            .clicked()
+                        {
                             app.tv_command(&id, "input keyevent KEYCODE_DPAD_UP");
                         }
                         ui.label("");
                         ui.end_row();
-                        if ui.add_sized(dpad_size, egui::Button::new(egui::RichText::new("◀").size(18.0)).fill(dpad_fill).corner_radius(8.0)).clicked() {
+                        if ui
+                            .add_sized(
+                                dpad_size,
+                                egui::Button::new(egui::RichText::new("◀").size(18.0))
+                                    .fill(dpad_fill)
+                                    .corner_radius(8.0),
+                            )
+                            .clicked()
+                        {
                             app.tv_command(&id, "input keyevent KEYCODE_DPAD_LEFT");
                         }
-                        if ui.add_sized(dpad_size, egui::Button::new(egui::RichText::new("OK").size(15.0).strong().color(egui::Color32::WHITE)).fill(theme::success_color()).corner_radius(8.0)).clicked() {
+                        if ui
+                            .add_sized(
+                                dpad_size,
+                                egui::Button::new(
+                                    egui::RichText::new("OK")
+                                        .size(15.0)
+                                        .strong()
+                                        .color(egui::Color32::WHITE),
+                                )
+                                .fill(theme::success_color())
+                                .corner_radius(8.0),
+                            )
+                            .clicked()
+                        {
                             app.tv_command(&id, "input keyevent KEYCODE_DPAD_CENTER");
                         }
-                        if ui.add_sized(dpad_size, egui::Button::new(egui::RichText::new("▶").size(18.0)).fill(dpad_fill).corner_radius(8.0)).clicked() {
+                        if ui
+                            .add_sized(
+                                dpad_size,
+                                egui::Button::new(egui::RichText::new("▶").size(18.0))
+                                    .fill(dpad_fill)
+                                    .corner_radius(8.0),
+                            )
+                            .clicked()
+                        {
                             app.tv_command(&id, "input keyevent KEYCODE_DPAD_RIGHT");
                         }
                         ui.end_row();
                         ui.label("");
-                        if ui.add_sized(dpad_size, egui::Button::new(egui::RichText::new("▼").size(18.0)).fill(dpad_fill).corner_radius(8.0)).clicked() {
+                        if ui
+                            .add_sized(
+                                dpad_size,
+                                egui::Button::new(egui::RichText::new("▼").size(18.0))
+                                    .fill(dpad_fill)
+                                    .corner_radius(8.0),
+                            )
+                            .clicked()
+                        {
                             app.tv_command(&id, "input keyevent KEYCODE_DPAD_DOWN");
                         }
                         ui.label("");
@@ -124,23 +178,43 @@ pub fn draw_tv(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             cols[1].vertical(|ui| {
                 // Nav
                 ui.horizontal_wrapped(|ui| {
-                    if tv_btn(ui, "🏠 Home", [82.0, 34.0]) { app.tv_command(&id, "input keyevent KEYCODE_HOME"); }
-                    if tv_btn(ui, "⬅ Back", [82.0, 34.0]) { app.tv_command(&id, "input keyevent KEYCODE_BACK"); }
-                    if tv_btn(ui, "☰ Menu", [82.0, 34.0]) { app.tv_command(&id, "input keyevent KEYCODE_MENU"); }
+                    if tv_btn(ui, "🏠 Home", [82.0, 34.0]) {
+                        app.tv_command(&id, "input keyevent KEYCODE_HOME");
+                    }
+                    if tv_btn(ui, "⬅ Back", [82.0, 34.0]) {
+                        app.tv_command(&id, "input keyevent KEYCODE_BACK");
+                    }
+                    if tv_btn(ui, "☰ Menu", [82.0, 34.0]) {
+                        app.tv_command(&id, "input keyevent KEYCODE_MENU");
+                    }
                 });
                 ui.add_space(6.0);
                 // Media
                 ui.horizontal_wrapped(|ui| {
-                    for (l, c) in [("⏮", "KEYCODE_MEDIA_PREVIOUS"), ("⏪", "KEYCODE_MEDIA_REWIND"), ("⏯", "KEYCODE_MEDIA_PLAY_PAUSE"), ("⏩", "KEYCODE_MEDIA_FAST_FORWARD"), ("⏭", "KEYCODE_MEDIA_NEXT")] {
-                        if tv_btn(ui, l, [48.0, 34.0]) { app.tv_command(&id, &format!("input keyevent {}", c)); }
+                    for (l, c) in [
+                        ("⏮", "KEYCODE_MEDIA_PREVIOUS"),
+                        ("⏪", "KEYCODE_MEDIA_REWIND"),
+                        ("⏯", "KEYCODE_MEDIA_PLAY_PAUSE"),
+                        ("⏩", "KEYCODE_MEDIA_FAST_FORWARD"),
+                        ("⏭", "KEYCODE_MEDIA_NEXT"),
+                    ] {
+                        if tv_btn(ui, l, [48.0, 34.0]) {
+                            app.tv_command(&id, &format!("input keyevent {}", c));
+                        }
                     }
                 });
                 ui.add_space(6.0);
                 // Volume
                 ui.horizontal_wrapped(|ui| {
-                    if tv_btn(ui, "🔊+", [58.0, 32.0]) { app.tv_command(&id, "input keyevent KEYCODE_VOLUME_UP"); }
-                    if tv_btn(ui, "🔉-", [58.0, 32.0]) { app.tv_command(&id, "input keyevent KEYCODE_VOLUME_DOWN"); }
-                    if tv_btn(ui, "🔇", [50.0, 32.0]) { app.tv_command(&id, "input keyevent KEYCODE_VOLUME_MUTE"); }
+                    if tv_btn(ui, "🔊+", [58.0, 32.0]) {
+                        app.tv_command(&id, "input keyevent KEYCODE_VOLUME_UP");
+                    }
+                    if tv_btn(ui, "🔉-", [58.0, 32.0]) {
+                        app.tv_command(&id, "input keyevent KEYCODE_VOLUME_DOWN");
+                    }
+                    if tv_btn(ui, "🔇", [50.0, 32.0]) {
+                        app.tv_command(&id, "input keyevent KEYCODE_VOLUME_MUTE");
+                    }
                 });
             });
         });
@@ -220,8 +294,18 @@ pub fn draw_tv(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             section_title(ui, "📡 Chaînes TV");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let edit_label = if app.channel_edit_mode { "✓ Terminé" } else { "✏ Éditer" };
-                if ui.add(egui::Button::new(egui::RichText::new(edit_label).size(12.0)).corner_radius(6.0)).clicked() {
+                let edit_label = if app.channel_edit_mode {
+                    "✓ Terminé"
+                } else {
+                    "✏ Éditer"
+                };
+                if ui
+                    .add(
+                        egui::Button::new(egui::RichText::new(edit_label).size(12.0))
+                            .corner_radius(6.0),
+                    )
+                    .clicked()
+                {
                     app.channel_edit_mode = !app.channel_edit_mode;
                 }
             });
@@ -244,8 +328,18 @@ pub fn draw_tv(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
                     if app.channel_edit_mode {
                         ui.horizontal(|ui| {
-                            if ui.add_sized(btn_size, btn).clicked() { channel_to_send = Some(ch.number); }
-                            if ui.add(egui::Button::new(egui::RichText::new("✕").color(theme::danger_color())).fill(egui::Color32::TRANSPARENT)).clicked() {
+                            if ui.add_sized(btn_size, btn).clicked() {
+                                channel_to_send = Some(ch.number);
+                            }
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("✕").color(theme::danger_color()),
+                                    )
+                                    .fill(egui::Color32::TRANSPARENT),
+                                )
+                                .clicked()
+                            {
                                 channel_to_delete = Some(i);
                             }
                         });
@@ -253,7 +347,9 @@ pub fn draw_tv(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         channel_to_send = Some(ch.number);
                     }
 
-                    if (i + 1) % cols == 0 { ui.end_row(); }
+                    if (i + 1) % cols == 0 {
+                        ui.end_row();
+                    }
                 }
             });
 
@@ -271,14 +367,32 @@ pub fn draw_tv(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.label("➕");
-                ui.add(egui::TextEdit::singleline(&mut app.new_channel_number).hint_text("N°").desired_width(35.0));
-                ui.add(egui::TextEdit::singleline(&mut app.new_channel_name).hint_text("Nom").desired_width(90.0));
-                let can_add = !app.new_channel_name.is_empty() && app.new_channel_number.parse::<u32>().is_ok();
-                if ui.add_enabled(can_add, egui::Button::new("Ajouter").fill(theme::success_color()).corner_radius(6.0)).clicked() {
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.new_channel_number)
+                        .hint_text("N°")
+                        .desired_width(35.0),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.new_channel_name)
+                        .hint_text("Nom")
+                        .desired_width(90.0),
+                );
+                let can_add = !app.new_channel_name.is_empty()
+                    && app.new_channel_number.parse::<u32>().is_ok();
+                if ui
+                    .add_enabled(
+                        can_add,
+                        egui::Button::new("Ajouter")
+                            .fill(theme::success_color())
+                            .corner_radius(6.0),
+                    )
+                    .clicked()
+                {
                     if let Ok(num) = app.new_channel_number.parse::<u32>() {
                         let name = app.new_channel_name.clone();
                         app.log(&format!("Chaîne {} {} ajoutée", num, name));
-                        app.tv_channels.push(crate::types::TvChannel { name, number: num });
+                        app.tv_channels
+                            .push(crate::types::TvChannel { name, number: num });
                         app.tv_channels.sort_by_key(|c| c.number);
                         config::save_channels(&app.tv_channels);
                         app.new_channel_name.clear();
@@ -367,26 +481,7 @@ pub fn draw_tv(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
             section(ui, app.dark_mode, |ui| {
                 section_title(ui, "📸 Capture d'écran");
-                let taking = app.tv_screenshot_loading;
-                let btn_text = if taking { "⏳ Capture..." } else { "📸 Capturer" };
-                if ui.add_enabled(!taking, egui::Button::new(btn_text).fill(theme::accent_color()).corner_radius(8.0).min_size(egui::vec2(ui.available_width(), 32.0))).clicked() {
-                    app.tv_screenshot_loading = true;
-                    let id_clone = id.clone();
-                    let tx = app.bg_tx.clone();
-                    std::thread::spawn(move || {
-                        if let Some(data) = adb::take_screenshot(&id_clone) {
-                            let _ = tx.send(BgEvent::ScreenshotReady { device_id: id_clone, data });
-                        } else {
-                            let _ = tx.send(BgEvent::Log("Échec capture".into()));
-                        }
-                    });
-                }
-                if app.tv_screenshot.is_some() {
-                    ui.add_space(4.0);
-                    let uri = "bytes://tv_screenshot.png";
-                    ctx.include_bytes(uri, app.tv_screenshot.clone().unwrap());
-                    ui.add(egui::Image::new(uri).max_width(ui.available_width()).corner_radius(6.0));
-                }
+                crate::ui::screenshot_panel(app, ui, ctx, &id);
             });
         });
     });

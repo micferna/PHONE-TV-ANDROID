@@ -69,7 +69,8 @@ pub fn draw_sidebar(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context
                         } else {
                             theme::danger_color()
                         };
-                        let status_dot = egui::RichText::new("●").color(status_dot_color).size(10.0);
+                        let status_dot =
+                            egui::RichText::new("●").color(status_dot_color).size(10.0);
                         let label_text = format!("{} {}", icon, device.name);
                         let selected = app.selected_device == Some(i);
                         let response = ui.horizontal(|ui| {
@@ -132,10 +133,8 @@ pub fn draw_sidebar(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context
             // Draw accent bar on the left for selected tab
             if selected {
                 let rect = response.rect;
-                let accent_rect = egui::Rect::from_min_size(
-                    rect.left_top(),
-                    egui::vec2(3.0, rect.height()),
-                );
+                let accent_rect =
+                    egui::Rect::from_min_size(rect.left_top(), egui::vec2(3.0, rect.height()));
                 ui.painter().rect_filled(
                     accent_rect,
                     egui::CornerRadius::same(1),
@@ -153,7 +152,11 @@ pub fn draw_sidebar(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context
             ui.add_space(8.0);
 
             // Dark/Light toggle
-            let toggle_text = if app.dark_mode { "☀ Mode clair" } else { "🌙 Mode sombre" };
+            let toggle_text = if app.dark_mode {
+                "☀ Mode clair"
+            } else {
+                "🌙 Mode sombre"
+            };
             if ui
                 .add(
                     egui::Button::new(egui::RichText::new(toggle_text).size(12.0))

@@ -98,14 +98,26 @@ pub fn press_key(id: &str, key: &str) {
 pub fn open_camera(id: &str) {
     adb_fire(
         id,
-        &["shell", "am", "start", "-a", "android.media.action.IMAGE_CAPTURE"],
+        &[
+            "shell",
+            "am",
+            "start",
+            "-a",
+            "android.media.action.IMAGE_CAPTURE",
+        ],
     );
 }
 
 pub fn open_video(id: &str) {
     adb_fire(
         id,
-        &["shell", "am", "start", "-a", "android.media.action.VIDEO_CAPTURE"],
+        &[
+            "shell",
+            "am",
+            "start",
+            "-a",
+            "android.media.action.VIDEO_CAPTURE",
+        ],
     );
 }
 
@@ -223,6 +235,25 @@ pub fn start_transfer(
     });
 }
 
+/// Pair with a device using Android 11+ wireless pairing.
+/// `addr` is the pairing address (IP:port) shown on the phone, `code` is the 6-digit code.
+/// Returns (success, message).
+pub fn pair_adb_wifi(addr: &str, code: &str) -> (bool, String) {
+    let output = Command::new("adb").args(["pair", addr, code]).output();
+    match output {
+        Ok(o) => {
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            let success = combined.to_lowercase().contains("successfully paired");
+            (success, combined.trim().to_string())
+        }
+        Err(e) => (false, format!("Erreur exécution adb: {}", e)),
+    }
+}
+
 pub fn connect_adb_wifi(addr: &str) -> bool {
     Command::new("adb")
         .args(["connect", addr])
@@ -234,53 +265,96 @@ pub fn connect_adb_wifi(addr: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Discover the local /24 prefix by asking the OS routing table which interface
+/// it would use to reach a public IP. Pure-Rust, works on Linux/macOS/Windows.
 pub fn get_local_ip_prefix() -> Option<String> {
-    if let Ok(output) = Command::new("hostname").arg("-I").output() {
-        let ips = String::from_utf8_lossy(&output.stdout);
-        for ip in ips.split_whitespace() {
-            if ip.starts_with("192.168.") || ip.starts_with("10.") || ip.starts_with("172.") {
-                let parts: Vec<&str> = ip.split('.').collect();
-                if parts.len() >= 3 {
-                    return Some(format!("{}.{}.{}.", parts[0], parts[1], parts[2]));
-                }
-            }
-        }
+    use std::net::UdpSocket;
+    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
+    // No packet is actually sent: connect on UDP just sets the default route.
+    sock.connect("8.8.8.8:80").ok()?;
+    let local = sock.local_addr().ok()?.ip();
+    let ip_str = local.to_string();
+    let parts: Vec<&str> = ip_str.split('.').collect();
+    if parts.len() == 4 {
+        Some(format!("{}.{}.{}.", parts[0], parts[1], parts[2]))
+    } else {
+        None
     }
-    None
 }
 
+/// Scan the local /24 for hosts listening on TCP/5555 (ADB wireless port).
+/// Pure-Rust parallel scan — works on Linux, macOS and Windows.
 pub fn scan_network_for_adb() -> Vec<String> {
-    let mut found = Vec::new();
+    use std::net::{SocketAddr, TcpStream};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
-    if let Some(prefix) = get_local_ip_prefix() {
-        let script = format!(
-            r#"for i in $(seq 1 254); do
-                (timeout 1 bash -c "echo >/dev/tcp/{prefix}$i/5555" 2>/dev/null && echo "{prefix}$i") &
-            done; wait"#,
-            prefix = prefix
-        );
+    let prefix = match get_local_ip_prefix() {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
 
-        if let Ok(output) = Command::new("bash").args(["-c", &script]).output() {
-            let result = String::from_utf8_lossy(&output.stdout);
-            for line in result.lines() {
-                let ip = line.trim();
-                if !ip.is_empty() && ip.starts_with(&prefix[..prefix.len() - 1]) {
-                    found.push(ip.to_string());
+    let found: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let mut handles = Vec::with_capacity(254);
+
+    for i in 1..=254u8 {
+        let ip = format!("{}{}", prefix, i);
+        let found = Arc::clone(&found);
+        handles.push(std::thread::spawn(move || {
+            if let Ok(addr) = format!("{}:5555", ip).parse::<SocketAddr>() {
+                if TcpStream::connect_timeout(&addr, Duration::from_millis(400)).is_ok() {
+                    if let Ok(mut v) = found.lock() {
+                        v.push(ip);
+                    }
                 }
             }
-        }
+        }));
+    }
+    for h in handles {
+        let _ = h.join();
     }
 
-    found
+    let mut result = Arc::try_unwrap(found)
+        .ok()
+        .and_then(|m| m.into_inner().ok())
+        .unwrap_or_default();
+    result.sort();
+    result
 }
 
 pub fn kill_child_tree(child: &mut Child) {
-    let pid = child.id();
-    let _ = Command::new("pkill")
-        .args(["-P", &pid.to_string()])
-        .output();
+    #[cfg(unix)]
+    {
+        let pid = child.id();
+        let _ = Command::new("pkill")
+            .args(["-P", &pid.to_string()])
+            .output();
+    }
+    #[cfg(windows)]
+    {
+        let pid = child.id();
+        // /T = also terminate child processes, /F = force
+        let _ = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output();
+    }
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// Build a scrcpy invocation that works on Linux (via flatpak aurynk) or other
+/// platforms (direct `scrcpy` / `scrcpy.exe` binary on PATH).
+fn scrcpy_command() -> Command {
+    #[cfg(target_os = "linux")]
+    {
+        let mut cmd = Command::new("flatpak");
+        cmd.args(["run", "--command=scrcpy", "io.github.IshuSinghSE.aurynk"]);
+        cmd
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Command::new("scrcpy")
+    }
 }
 
 pub fn start_webcam_process(
@@ -291,20 +365,20 @@ pub fn start_webcam_process(
 ) -> Option<Child> {
     let facing_arg = format!("--camera-facing={}", if front { "front" } else { "back" });
     let mut args = vec![
-        "run".to_string(),
-        "--command=scrcpy".to_string(),
-        "io.github.IshuSinghSE.aurynk".to_string(),
         "-s".to_string(),
         id.to_string(),
         "--video-source=camera".to_string(),
         facing_arg,
         "--camera-size=1280x720".to_string(),
-        "--v4l2-sink=/dev/video10".to_string(),
     ];
 
-    if with_mic && audio_output {
-        args.push("--audio-source=mic".to_string());
-    } else if with_mic {
+    // Linux: pipe directly into a v4l2loopback virtual device.
+    // Windows/macOS: just show a scrcpy window; the user routes it to a virtual
+    // camera via OBS Virtual Camera (or equivalent).
+    #[cfg(target_os = "linux")]
+    args.push("--v4l2-sink=/dev/video10".to_string());
+
+    if with_mic {
         args.push("--audio-source=mic".to_string());
     } else if audio_output {
         args.push("--audio-source=playback".to_string());
@@ -312,14 +386,12 @@ pub fn start_webcam_process(
     } else {
         args.push("--no-audio".to_string());
     }
-    Command::new("flatpak").args(&args).spawn().ok()
+
+    scrcpy_command().args(&args).spawn().ok()
 }
 
 pub fn start_mirror_process(id: &str, stay_awake: bool) -> Option<Child> {
     let mut args = vec![
-        "run".to_string(),
-        "--command=scrcpy".to_string(),
-        "io.github.IshuSinghSE.aurynk".to_string(),
         "-s".to_string(),
         id.to_string(),
         "--no-audio".to_string(),
@@ -328,11 +400,24 @@ pub fn start_mirror_process(id: &str, stay_awake: bool) -> Option<Child> {
     if stay_awake {
         args.push("--stay-awake".to_string());
     }
-    Command::new("flatpak").args(&args).spawn().ok()
+    scrcpy_command().args(&args).spawn().ok()
+}
+
+/// Returns true on platforms that can route the phone camera straight to a
+/// system-visible virtual webcam without extra software (Linux + v4l2loopback).
+/// On Windows/macOS the user needs OBS Virtual Camera or similar.
+pub const fn webcam_direct_supported() -> bool {
+    cfg!(target_os = "linux")
 }
 
 pub fn send_text_to_device(id: &str, text: &str) {
-    let escaped = text.replace(' ', "%s").replace('&', "\\&").replace('<', "\\<").replace('>', "\\>").replace('\'', "\\'").replace('"', "\\\"");
+    let escaped = text
+        .replace(' ', "%s")
+        .replace('&', "\\&")
+        .replace('<', "\\<")
+        .replace('>', "\\>")
+        .replace('\'', "\\'")
+        .replace('"', "\\\"");
     adb_fire(id, &["shell", "input", "text", &escaped]);
 }
 
@@ -346,30 +431,149 @@ pub fn get_battery_info(id: &str) -> Option<(u8, String)> {
         if line.starts_with("level:") {
             level = line.split(':').nth(1).and_then(|s| s.trim().parse().ok());
         } else if line.starts_with("status:") {
-            let code: u8 = line.split(':').nth(1).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+            let code: u8 = line
+                .split(':')
+                .nth(1)
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(0);
             status_str = match code {
                 2 => "En charge",
                 3 => "Décharge",
                 4 => "Pas en charge",
                 5 => "Plein",
                 _ => "Inconnu",
-            }.to_string();
+            }
+            .to_string();
         }
     }
 
     level.map(|l| (l, status_str))
 }
 
-
 pub fn ring_phone(id: &str) {
     // Max volume
-    adb_fire(id, &["shell", "media", "volume", "--set", "15", "--stream", "2"]);
+    adb_fire(
+        id,
+        &["shell", "media", "volume", "--set", "15", "--stream", "2"],
+    );
     // Play alarm sound
-    adb_fire(id, &["shell", "am", "start", "-a", "android.intent.action.CALL", "-d", "tel:0000000000"]);
+    adb_fire(
+        id,
+        &[
+            "shell",
+            "am",
+            "start",
+            "-a",
+            "android.intent.action.CALL",
+            "-d",
+            "tel:0000000000",
+        ],
+    );
 }
 
 pub fn stop_ring(id: &str) {
     adb_fire(id, &["shell", "input", "keyevent", "KEYCODE_ENDCALL"]);
+}
+
+/// Push a local file to a remote path on the device.
+pub fn push_file(id: &str, local: &str, remote: &str) -> (bool, String) {
+    let output = Command::new("adb")
+        .args(["-s", id, "push", local, remote])
+        .output();
+    match output {
+        Ok(o) => {
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            (o.status.success(), combined.trim().to_string())
+        }
+        Err(e) => (false, format!("Erreur adb: {}", e)),
+    }
+}
+
+/// Pull a remote file from the device to a local path.
+pub fn pull_file(id: &str, remote: &str, local: &str) -> (bool, String) {
+    let output = Command::new("adb")
+        .args(["-s", id, "pull", remote, local])
+        .output();
+    match output {
+        Ok(o) => {
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            (o.status.success(), combined.trim().to_string())
+        }
+        Err(e) => (false, format!("Erreur adb: {}", e)),
+    }
+}
+
+/// Install an APK on the device. Uses `-r` to reinstall keeping data, `-g` to grant runtime perms.
+/// Returns (success, stdout+stderr).
+pub fn install_apk(id: &str, apk_path: &str) -> (bool, String) {
+    let output = Command::new("adb")
+        .args(["-s", id, "install", "-r", "-g", apk_path])
+        .output();
+
+    match output {
+        Ok(o) => {
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            // adb install prints "Success" on stdout when ok
+            (
+                o.status.success() && combined.contains("Success"),
+                combined.trim().to_string(),
+            )
+        }
+        Err(e) => (false, format!("Erreur exécution adb: {}", e)),
+    }
+}
+
+/// Start a background `adb shell screenrecord` writing to a remote path.
+/// The returned Child must be killed to stop recording. Returns (child, remote_path).
+pub fn start_screenrecord(id: &str) -> Option<(Child, String)> {
+    let remote = "/sdcard/phone_tv_recording.mp4".to_string();
+    let child = Command::new("adb")
+        .args(["-s", id, "shell", "screenrecord", &remote])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    Some((child, remote))
+}
+
+/// Stop a running screenrecord child and pull the remote .mp4 to `local_dest`.
+/// Returns true on success.
+pub fn stop_screenrecord_and_pull(
+    id: &str,
+    child: &mut Child,
+    remote: &str,
+    local_dest: &Path,
+) -> bool {
+    // Killing the adb client makes the on-device screenrecord stop, but with a delay.
+    kill_child_tree(child);
+    // Give the device a moment to finalize the mp4 header.
+    std::thread::sleep(std::time::Duration::from_millis(800));
+
+    let local_str = local_dest.to_string_lossy().to_string();
+    let pulled = Command::new("adb")
+        .args(["-s", id, "pull", remote, &local_str])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    // Best-effort cleanup remote file
+    let _ = Command::new("adb")
+        .args(["-s", id, "shell", "rm", remote])
+        .spawn();
+
+    pulled && local_dest.exists()
 }
 
 pub fn take_screenshot(id: &str) -> Option<Vec<u8>> {

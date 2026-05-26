@@ -49,15 +49,16 @@ pub fn draw_video(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
         .stroke(egui::Stroke::new(0.5, theme::card_border(app.dark_mode)))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new("📤 Transfert fichier").strong().size(14.0));
+            ui.label(
+                egui::RichText::new("📤 Transfert fichier")
+                    .strong()
+                    .size(14.0),
+            );
             ui.add_space(4.0);
 
             // Drag & drop support
-            let dropped_file = ctx.input(|i| {
-                i.raw.dropped_files
-                    .first()
-                    .and_then(|f| f.path.clone())
-            });
+            let dropped_file =
+                ctx.input(|i| i.raw.dropped_files.first().and_then(|f| f.path.clone()));
             if let Some(path) = dropped_file {
                 app.file_path = path.display().to_string();
                 app.log(&format!("Fichier déposé: {}", app.file_path));
@@ -86,8 +87,16 @@ pub fn draw_video(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
             let transfer_preview = app.transfer.lock().unwrap().clone();
             if app.file_path.is_empty() && !transfer_preview.active {
                 ui.add_space(8.0);
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 80.0), egui::Sense::hover());
-                ui.painter().rect_stroke(rect, 8.0, egui::Stroke::new(2.0, theme::text_dim(app.dark_mode)), egui::StrokeKind::Outside);
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 80.0),
+                    egui::Sense::hover(),
+                );
+                ui.painter().rect_stroke(
+                    rect,
+                    8.0,
+                    egui::Stroke::new(2.0, theme::text_dim(app.dark_mode)),
+                    egui::StrokeKind::Outside,
+                );
                 ui.painter().text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
@@ -153,8 +162,7 @@ pub fn draw_video(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                         if ui
                             .add_sized(
                                 [140.0, 36.0],
-                                egui::Button::new("▶ Envoyer+Lire")
-                                    .fill(theme::success_color()),
+                                egui::Button::new("▶ Envoyer+Lire").fill(theme::success_color()),
                             )
                             .clicked()
                         {

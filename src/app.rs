@@ -33,6 +33,9 @@ pub struct PhoneTvApp {
     // Process tracking
     pub webcam_child: Option<Child>,
     pub mirror_child: Option<Child>,
+    pub screenrecord_child: Option<Child>,
+    pub screenrecord_remote: String,
+    pub screenrecord_device_id: String,
     // Transfer
     pub video_url: String,
     pub file_path: String,
@@ -41,6 +44,11 @@ pub struct PhoneTvApp {
     pub network_devices: Vec<String>,
     pub scanning: bool,
     pub manual_ip: String,
+    // Wireless pairing (Android 11+)
+    pub pair_addr: String,
+    pub pair_code: String,
+    pub pair_connect_port: String,
+    pub pairing: bool,
     // Background events
     pub bg_rx: mpsc::Receiver<BgEvent>,
     pub bg_tx: mpsc::Sender<BgEvent>,
@@ -60,9 +68,9 @@ pub struct PhoneTvApp {
     pub new_channel_number: String,
     // TV text input (NEW)
     pub tv_text_input: String,
-    // TV screenshot (NEW)
-    pub tv_screenshot: Option<Vec<u8>>,
-    pub tv_screenshot_loading: bool,
+    // Device screenshot (shared TV/phone)
+    pub screenshot: Option<Vec<u8>>,
+    pub screenshot_loading: bool,
     // Replay
     pub replay_custom_min: String,
     // Phone battery (NEW)
@@ -70,6 +78,10 @@ pub struct PhoneTvApp {
     // Phone apps (NEW)
     pub phone_apps: Vec<String>,
     pub phone_apps_loading: bool,
+    pub apk_installing: bool,
+    // File transfer (generic push/pull)
+    pub pull_remote_path: String,
+    pub file_transferring: bool,
     // Security
     pub security_view: SecurityView,
     pub security_score: Option<(u8, Vec<SecurityIssue>)>,
@@ -128,12 +140,19 @@ impl PhoneTvApp {
             mirror_active: false,
             webcam_child: None,
             mirror_child: None,
+            screenrecord_child: None,
+            screenrecord_remote: String::new(),
+            screenrecord_device_id: String::new(),
             video_url: String::new(),
             file_path: String::new(),
             transfer: Arc::new(Mutex::new(TransferState::default())),
             network_devices: Vec::new(),
             scanning: false,
             manual_ip: String::new(),
+            pair_addr: String::new(),
+            pair_code: String::new(),
+            pair_connect_port: "5555".to_string(),
+            pairing: false,
             bg_rx,
             bg_tx,
             refreshing: false,
@@ -147,12 +166,15 @@ impl PhoneTvApp {
             new_channel_name: String::new(),
             new_channel_number: String::new(),
             tv_text_input: String::new(),
-            tv_screenshot: None,
-            tv_screenshot_loading: false,
+            screenshot: None,
+            screenshot_loading: false,
             replay_custom_min: String::new(),
             phone_battery: None,
             phone_apps: Vec::new(),
             phone_apps_loading: false,
+            apk_installing: false,
+            pull_remote_path: "/sdcard/Download/".to_string(),
+            file_transferring: false,
             // Security
             security_view: SecurityView::Score,
             security_score: None,
@@ -278,6 +300,24 @@ impl PhoneTvApp {
         });
     }
 
+    pub fn pair_wifi_async(&mut self, addr: String, code: String, ctx: &egui::Context) {
+        if self.pairing {
+            return;
+        }
+        self.pairing = true;
+        let tx = self.bg_tx.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let (success, message) = adb::pair_adb_wifi(&addr, &code);
+            let _ = tx.send(BgEvent::WifiPaired {
+                addr,
+                success,
+                message,
+            });
+            ctx.request_repaint();
+        });
+    }
+
     pub fn switch_camera_async(&mut self, id: String, ctx: &egui::Context) {
         if self.switching_cam {
             return;
@@ -324,13 +364,7 @@ impl PhoneTvApp {
     pub fn ensure_tv_shell(&mut self, device_id: &str) -> bool {
         let need_new = match &mut self.tv_shell {
             Some(shell) => {
-                if shell.device_id != device_id {
-                    true
-                } else if let Ok(Some(_)) = shell.child.try_wait() {
-                    true
-                } else {
-                    false
-                }
+                shell.device_id != device_id || matches!(shell.child.try_wait(), Ok(Some(_)))
             }
             None => true,
         };
@@ -367,9 +401,7 @@ impl PhoneTvApp {
         }
         if let Some(ref mut shell) = self.tv_shell {
             let full_cmd = format!("{}\n", cmd);
-            if shell.stdin.write_all(full_cmd.as_bytes()).is_err()
-                || shell.stdin.flush().is_err()
-            {
+            if shell.stdin.write_all(full_cmd.as_bytes()).is_err() || shell.stdin.flush().is_err() {
                 self.tv_shell = None;
                 adb::adb_fire(device_id, &["shell", cmd]);
             }
@@ -433,15 +465,13 @@ impl PhoneTvApp {
                 for _ in 0..20 {
                     std::thread::sleep(std::time::Duration::from_millis(500));
                     wait_count += 1;
-                    let ready =
-                        adb::adb_device(&id, &["shell", "dumpsys", "window", "windows"])
-                            .map(|out| {
-                                out.lines().any(|l| {
-                                    l.contains("mCurrentFocus")
-                                        && l.contains("net.oqee.androidtv")
-                                })
+                    let ready = adb::adb_device(&id, &["shell", "dumpsys", "window", "windows"])
+                        .map(|out| {
+                            out.lines().any(|l| {
+                                l.contains("mCurrentFocus") && l.contains("net.oqee.androidtv")
                             })
-                            .unwrap_or(false);
+                        })
+                        .unwrap_or(false);
                     if ready {
                         consecutive += 1;
                         if consecutive >= 2 {
@@ -458,16 +488,15 @@ impl PhoneTvApp {
 
                 std::thread::sleep(std::time::Duration::from_millis(1500));
 
-                let focus2 =
-                    adb::adb_device(&id, &["shell", "dumpsys", "window", "windows"])
-                        .map(|out| {
-                            out.lines()
-                                .find(|l| l.contains("mCurrentFocus"))
-                                .unwrap_or("")
-                                .trim()
-                                .to_string()
-                        })
-                        .unwrap_or_default();
+                let focus2 = adb::adb_device(&id, &["shell", "dumpsys", "window", "windows"])
+                    .map(|out| {
+                        out.lines()
+                            .find(|l| l.contains("mCurrentFocus"))
+                            .unwrap_or("")
+                            .trim()
+                            .to_string()
+                    })
+                    .unwrap_or_default();
                 let on_oqee = focus2.contains("net.oqee.androidtv");
                 let on_live = focus2.contains("LivePlayer");
                 let _ = bg_tx.send(BgEvent::Log(format!(
@@ -497,24 +526,18 @@ impl PhoneTvApp {
                 }
 
                 if !on_live {
-                    let focus3 =
-                        adb::adb_device(&id, &["shell", "dumpsys", "window", "windows"])
-                            .map(|out| {
-                                out.lines()
-                                    .find(|l| l.contains("mCurrentFocus"))
-                                    .unwrap_or("")
-                                    .trim()
-                                    .to_string()
-                            })
-                            .unwrap_or_default();
-                    if focus3.contains("net.oqee.androidtv")
-                        && !focus3.contains("LivePlayer")
-                    {
+                    let focus3 = adb::adb_device(&id, &["shell", "dumpsys", "window", "windows"])
+                        .map(|out| {
+                            out.lines()
+                                .find(|l| l.contains("mCurrentFocus"))
+                                .unwrap_or("")
+                                .trim()
+                                .to_string()
+                        })
+                        .unwrap_or_default();
+                    if focus3.contains("net.oqee.androidtv") && !focus3.contains("LivePlayer") {
                         let _ = bg_tx.send(BgEvent::Log("[6] Menu OQEE → OK...".into()));
-                        adb::adb_fire(
-                            &id,
-                            &["shell", "input", "keyevent", "KEYCODE_DPAD_CENTER"],
-                        );
+                        adb::adb_fire(&id, &["shell", "input", "keyevent", "KEYCODE_DPAD_CENTER"]);
                         std::thread::sleep(std::time::Duration::from_millis(2000));
                     }
                 }
@@ -549,11 +572,8 @@ impl PhoneTvApp {
                         let total = cols[1].to_string();
                         let used = cols[2].to_string();
                         let avail = cols[3].to_string();
-                        let percent = cols[4]
-                            .trim_end_matches('%')
-                            .parse::<f32>()
-                            .unwrap_or(0.0)
-                            / 100.0;
+                        let percent =
+                            cols[4].trim_end_matches('%').parse::<f32>().unwrap_or(0.0) / 100.0;
                         let _ = tx.send(BgEvent::StorageInfo {
                             device_id: id,
                             total,
@@ -605,6 +625,30 @@ impl PhoneTvApp {
                     }
                     self.connecting = false;
                 }
+                BgEvent::WifiPaired {
+                    addr,
+                    success,
+                    message,
+                } => {
+                    self.pairing = false;
+                    if success {
+                        self.log(&format!("Paire avec {}", addr));
+                        self.pair_code.clear();
+                        // Auto-attempt connect on default port
+                        if let Some(ip) = addr.split(':').next() {
+                            let connect_port = if self.pair_connect_port.is_empty() {
+                                "5555".to_string()
+                            } else {
+                                self.pair_connect_port.clone()
+                            };
+                            let connect_addr = format!("{}:{}", ip, connect_port);
+                            self.log(&format!("Tentative connexion {}", connect_addr));
+                            self.connect_wifi_async(connect_addr, ctx);
+                        }
+                    } else {
+                        self.log(&format!("Échec pairing {}: {}", addr, message));
+                    }
+                }
                 BgEvent::WebcamSwitched(child) => {
                     if !self.switching_cam {
                         if let Some(mut c) = child {
@@ -637,22 +681,32 @@ impl PhoneTvApp {
                 } => {
                     self.phone_battery = Some((level, status));
                 }
-                BgEvent::PhoneApps {
-                    device_id: _,
-                    apps,
-                } => {
+                BgEvent::PhoneApps { device_id: _, apps } => {
                     self.phone_apps = apps;
                     self.phone_apps_loading = false;
                 }
-                BgEvent::ScreenshotReady {
-                    device_id: _,
-                    data,
-                } => {
+                BgEvent::ScreenshotReady { device_id: _, data } => {
                     // Forget old screenshot texture if any
-                    ctx.forget_image("bytes://tv_screenshot.png");
-                    self.tv_screenshot = Some(data);
-                    self.tv_screenshot_loading = false;
+                    ctx.forget_image("bytes://device_screenshot.png");
+                    self.screenshot = Some(data);
+                    self.screenshot_loading = false;
                     self.log("Capture d'écran reçue");
+                }
+                BgEvent::ApkInstalled { success, message } => {
+                    self.apk_installing = false;
+                    if success {
+                        self.log(&format!("APK installé: {}", message));
+                    } else {
+                        self.log(&format!("Échec install APK: {}", message));
+                    }
+                }
+                BgEvent::FileTransferDone { success, message } => {
+                    self.file_transferring = false;
+                    if success {
+                        self.log(&format!("Transfert OK: {}", message));
+                    } else {
+                        self.log(&format!("Échec transfert: {}", message));
+                    }
                 }
                 BgEvent::Log(msg) => {
                     self.log(&msg);
@@ -665,11 +719,15 @@ impl PhoneTvApp {
                     self.security_apps_loaded_count = 0;
                     self.security_apps = packages
                         .into_iter()
-                        .map(|p| AppInfo { package: p, ..Default::default() })
+                        .map(|p| AppInfo {
+                            package: p,
+                            ..Default::default()
+                        })
                         .collect();
                 }
                 BgEvent::SecurityAppDetail { package, info } => {
-                    if let Some(app) = self.security_apps.iter_mut().find(|a| a.package == package) {
+                    if let Some(app) = self.security_apps.iter_mut().find(|a| a.package == package)
+                    {
                         *app = info;
                     }
                     self.security_apps_loaded_count += 1;
@@ -690,17 +748,27 @@ impl PhoneTvApp {
                     self.security_posture = checks;
                     self.security_posture_loading = false;
                 }
-                BgEvent::SecurityPermissions { package, permissions } => {
+                BgEvent::SecurityPermissions {
+                    package,
+                    permissions,
+                } => {
                     self.security_permission_cache.insert(package, permissions);
                     // Clear loading when we have permissions for all known apps
-                    if !self.security_apps.is_empty() && self.security_permission_cache.len() >= self.security_apps.len() {
+                    if !self.security_apps.is_empty()
+                        && self.security_permission_cache.len() >= self.security_apps.len()
+                    {
                         self.security_permissions_loading = false;
                     }
                 }
                 BgEvent::BlacklistAlert { found } => {
                     self.blacklist_alerts = found;
                 }
-                BgEvent::AppActionResult { package, action, success, message } => {
+                BgEvent::AppActionResult {
+                    package,
+                    action,
+                    success,
+                    message,
+                } => {
                     let status = if success { "✓" } else { "✗" };
                     self.log(&format!("{} {} {} : {}", status, action, package, message));
                     if success {
@@ -712,12 +780,16 @@ impl PhoneTvApp {
                                 self.security_score_loading = false;
                             }
                             "disable" => {
-                                if let Some(a) = self.security_apps.iter_mut().find(|a| a.package == package) {
+                                if let Some(a) =
+                                    self.security_apps.iter_mut().find(|a| a.package == package)
+                                {
                                     a.enabled = false;
                                 }
                             }
                             "enable" => {
-                                if let Some(a) = self.security_apps.iter_mut().find(|a| a.package == package) {
+                                if let Some(a) =
+                                    self.security_apps.iter_mut().find(|a| a.package == package)
+                                {
                                     a.enabled = true;
                                 }
                             }
@@ -728,40 +800,65 @@ impl PhoneTvApp {
                 BgEvent::SecurityAppsLoadingDone => {
                     self.security_apps_loading = false;
                 }
-                BgEvent::WizardScanProgress { current, total, package } => {
+                BgEvent::WizardScanProgress {
+                    current,
+                    total,
+                    package,
+                } => {
                     self.wizard.scan_progress = current as f32 / total as f32;
                     self.wizard.scan_current = current;
                     self.wizard.scan_total = total;
                     self.wizard.scan_current_package = package;
                 }
-                BgEvent::LlmModelValid { valid, model, error } => {
-                    self.llm_model_status = Some((valid, error.unwrap_or_else(|| format!("{} OK", model))));
+                BgEvent::LlmModelValid {
+                    valid,
+                    model,
+                    error,
+                } => {
+                    self.llm_model_status =
+                        Some((valid, error.unwrap_or_else(|| format!("{} OK", model))));
                 }
                 BgEvent::WizardDeviceDetected { info } => {
                     self.wizard.device_info = Some(info);
                     // Reste sur Detection — l'utilisateur clique "Lancer le scan" pour avancer
                 }
-                BgEvent::WizardScanComplete { apps, posture, score, issues } => {
+                BgEvent::WizardScanComplete {
+                    apps,
+                    posture,
+                    score,
+                    issues,
+                } => {
                     self.wizard.score_before = Some((score, issues));
                     self.wizard.apps = apps;
                     self.wizard.posture = posture;
                     self.wizard.scan_loading = false;
                     self.wizard.step = crate::wizard::types::WizardStep::Pentest;
                 }
-                BgEvent::WizardPentestComplete { vulns, root, risk_score } => {
+                BgEvent::WizardPentestComplete {
+                    vulns,
+                    root,
+                    risk_score,
+                } => {
                     self.wizard.vulns = vulns;
                     self.wizard.root_status = Some(root);
                     self.wizard.risk_score = Some(risk_score);
                     self.wizard.pentest_loading = false;
                     self.wizard.step = crate::wizard::types::WizardStep::ProfileSelection;
                 }
-                BgEvent::WizardCleanProgress { package, action, success, message } => {
-                    self.wizard.clean_results.push(crate::wizard::types::CleanResult {
-                        package,
-                        action,
-                        success,
-                        message,
-                    });
+                BgEvent::WizardCleanProgress {
+                    package,
+                    action,
+                    success,
+                    message,
+                } => {
+                    self.wizard
+                        .clean_results
+                        .push(crate::wizard::types::CleanResult {
+                            package,
+                            action,
+                            success,
+                            message,
+                        });
                     self.wizard.clean_progress += 1;
                 }
                 BgEvent::WizardCleanComplete => {
@@ -769,7 +866,10 @@ impl PhoneTvApp {
                     self.wizard.step = crate::wizard::types::WizardStep::Report;
                 }
                 BgEvent::LlmAppVerdicts { verdicts } => {
-                    self.wizard.ai_verdicts = verdicts.into_iter().map(|v| (v.package.clone(), v)).collect();
+                    self.wizard.ai_verdicts = verdicts
+                        .into_iter()
+                        .map(|v| (v.package.clone(), v))
+                        .collect();
                     self.wizard.ai_loading = false;
                 }
                 BgEvent::LlmPentestReport { vulns } => {
@@ -785,13 +885,22 @@ impl PhoneTvApp {
                 BgEvent::HistoryLoaded { history } => {
                     self.wizard.history = history;
                 }
-                BgEvent::WizardRootabilityResult { rootable, method, confidence, details } => {
+                BgEvent::WizardRootabilityResult {
+                    rootable,
+                    method,
+                    confidence,
+                    details,
+                } => {
                     if let Some(ref mut root) = self.wizard.root_status {
                         root.rootable = Some(rootable);
                         root.root_method = method;
                     }
-                    self.log(&format!("Rootabilite: {} (confiance: {}) — {}",
-                        if rootable { "OUI" } else { "NON" }, confidence, details));
+                    self.log(&format!(
+                        "Rootabilite: {} (confiance: {}) — {}",
+                        if rootable { "OUI" } else { "NON" },
+                        confidence,
+                        details
+                    ));
                 }
             }
         }
@@ -888,41 +997,41 @@ impl eframe::App for PhoneTvApp {
 
                 if !self.logs_collapsed {
                     ui.add_space(4.0);
-                    egui::ScrollArea::vertical()
-                        .show(ui, |ui| {
-                            for log in &self.logs {
-                                // Color based on content
-                                let color = if log.contains("✓") {
-                                    theme::success_color()
-                                } else if log.contains("✗") || log.contains("Échec") || log.contains("Erreur") {
-                                    theme::danger_color()
-                                } else if log.contains("⚠") || log.contains("ATTENTION") {
-                                    theme::warning_color()
-                                } else {
-                                    theme::text_primary(self.dark_mode)
-                                };
-                                ui.label(
-                                    egui::RichText::new(log)
-                                        .size(12.0)
-                                        .family(egui::FontFamily::Monospace)
-                                        .color(color),
-                                );
-                            }
-                        });
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for log in &self.logs {
+                            // Color based on content
+                            let color = if log.contains("✓") {
+                                theme::success_color()
+                            } else if log.contains("✗")
+                                || log.contains("Échec")
+                                || log.contains("Erreur")
+                            {
+                                theme::danger_color()
+                            } else if log.contains("⚠") || log.contains("ATTENTION") {
+                                theme::warning_color()
+                            } else {
+                                theme::text_primary(self.dark_mode)
+                            };
+                            ui.label(
+                                egui::RichText::new(log)
+                                    .size(12.0)
+                                    .family(egui::FontFamily::Monospace)
+                                    .color(color),
+                            );
+                        }
+                    });
                 }
             });
 
         // Central panel: tab content
         egui::CentralPanel::default().show(ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                match self.active_tab {
-                    Tab::Devices => ui::draw_devices(self, ui, ctx),
-                    Tab::Tv => ui::draw_tv(self, ui, ctx),
-                    Tab::Phone => ui::draw_phone(self, ui, ctx),
-                    Tab::Video => ui::draw_video(self, ui, ctx),
-                    Tab::Security => ui::draw_security(self, ui, ctx),
-                    Tab::Audit => ui::draw_audit(self, ui, ctx),
-                }
+            egui::ScrollArea::vertical().show(ui, |ui| match self.active_tab {
+                Tab::Devices => ui::draw_devices(self, ui, ctx),
+                Tab::Tv => ui::draw_tv(self, ui, ctx),
+                Tab::Phone => ui::draw_phone(self, ui, ctx),
+                Tab::Video => ui::draw_video(self, ui, ctx),
+                Tab::Security => ui::draw_security(self, ui, ctx),
+                Tab::Audit => ui::draw_audit(self, ui, ctx),
             });
         });
 

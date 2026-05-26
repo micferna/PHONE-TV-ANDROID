@@ -111,6 +111,73 @@ pub fn draw_devices(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context
             });
         });
 
+    ui.add_space(6.0);
+
+    // Wireless ADB pairing (Android 11+)
+    egui::Frame::NONE
+        .corner_radius(8.0)
+        .inner_margin(10.0)
+        .fill(theme::card_bg(app.dark_mode))
+        .stroke(egui::Stroke::new(0.5, theme::card_border(app.dark_mode)))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(egui::RichText::new("🔗 Appairage sans fil (Android 11+)").strong());
+            ui.label(
+                egui::RichText::new(
+                    "Paramètres → Options développeur → Débogage sans fil → Associer avec un code",
+                )
+                .size(11.0)
+                .color(egui::Color32::GRAY),
+            );
+            ui.add_space(6.0);
+
+            ui.horizontal(|ui| {
+                ui.label("Adresse pair:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.pair_addr)
+                        .hint_text("192.168.1.x:37413")
+                        .desired_width(160.0),
+                );
+                ui.label("Code:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.pair_code)
+                        .hint_text("123456")
+                        .desired_width(80.0),
+                );
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Port connexion:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.pair_connect_port)
+                        .hint_text("5555")
+                        .desired_width(60.0),
+                );
+
+                let can_pair = app.pair_addr.contains(':')
+                    && app.pair_code.len() == 6
+                    && app.pair_code.chars().all(|c| c.is_ascii_digit())
+                    && !app.pairing;
+
+                let btn_text = if app.pairing {
+                    "⏳ Pairing..."
+                } else {
+                    "🔗 Appairer"
+                };
+                if ui
+                    .add_enabled(
+                        can_pair,
+                        egui::Button::new(btn_text).fill(theme::accent_color()),
+                    )
+                    .clicked()
+                {
+                    let addr = app.pair_addr.clone();
+                    let code = app.pair_code.clone();
+                    app.pair_wifi_async(addr, code, ctx);
+                }
+            });
+        });
+
     ui.add_space(12.0);
     ui.separator();
     ui.add_space(8.0);
@@ -177,15 +244,16 @@ pub fn draw_devices(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context
                             (theme::warning_color(), "offline")
                         };
                         ui.label(egui::RichText::new("●").color(status_color));
-                        ui.label(
-                            egui::RichText::new(status_text)
-                                .small()
-                                .color(status_color),
-                        );
+                        ui.label(egui::RichText::new(status_text).small().color(status_color));
                     });
                 });
                 // Device ID in monospace dimmed text
-                ui.label(egui::RichText::new(&device.id).size(10.0).family(egui::FontFamily::Monospace).color(theme::text_dim(app.dark_mode)));
+                ui.label(
+                    egui::RichText::new(&device.id)
+                        .size(10.0)
+                        .family(egui::FontFamily::Monospace)
+                        .color(theme::text_dim(app.dark_mode)),
+                );
             });
             ui.add_space(4.0);
         }
