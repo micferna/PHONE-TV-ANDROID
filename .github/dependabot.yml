@@ -15,6 +15,13 @@ updates:
       minor-updates:
         update-types:
           - minor
+    ignore:
+      # Major bumps require an App trait rewrite (update -> ui). Re-enable
+      # when scheduling the egui 0.34 migration.
+      - dependency-name: eframe
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: egui_extras
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: github-actions
     directory: "/"
