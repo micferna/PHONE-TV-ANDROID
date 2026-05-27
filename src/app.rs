@@ -929,8 +929,9 @@ impl PhoneTvApp {
 }
 
 impl eframe::App for PhoneTvApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.process_bg_events(ctx);
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        self.process_bg_events(&ctx);
         self.check_children();
 
         // Guard: if active tab is disabled, fallback to Devices
@@ -939,31 +940,31 @@ impl eframe::App for PhoneTvApp {
         }
 
         // Sidebar
-        egui::SidePanel::left("sidebar")
+        egui::Panel::left("sidebar")
             .resizable(false)
-            .exact_width(180.0)
+            .exact_size(180.0)
             .frame(
                 egui::Frame::NONE
                     .inner_margin(10.0)
                     .fill(theme::sidebar_fill(self.dark_mode)),
             )
-            .show(ctx, |ui| {
-                ui::draw_sidebar(self, ui, ctx);
+            .show_inside(ui, |ui| {
+                ui::draw_sidebar(self, ui, &ctx);
             });
 
         // Bottom panel: logs (resizable)
-        egui::TopBottomPanel::bottom("footer")
+        egui::Panel::bottom("footer")
             .resizable(true)
-            .default_height(160.0)
-            .min_height(36.0)
-            .max_height(400.0)
+            .default_size(160.0)
+            .min_size(36.0)
+            .max_size(400.0)
             .frame(
                 egui::Frame::NONE
                     .inner_margin(8.0)
                     .fill(theme::sidebar_fill(self.dark_mode))
                     .stroke(egui::Stroke::new(1.0, theme::card_border(self.dark_mode))),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 let log_count = self.logs.len();
                 ui.horizontal(|ui| {
                     let arrow = if self.logs_collapsed { "▶" } else { "▼" };
@@ -1024,18 +1025,18 @@ impl eframe::App for PhoneTvApp {
             });
 
         // Central panel: tab content
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| match self.active_tab {
-                Tab::Devices => ui::draw_devices(self, ui, ctx),
-                Tab::Tv => ui::draw_tv(self, ui, ctx),
-                Tab::Phone => ui::draw_phone(self, ui, ctx),
-                Tab::Video => ui::draw_video(self, ui, ctx),
-                Tab::Security => ui::draw_security(self, ui, ctx),
-                Tab::Audit => ui::draw_audit(self, ui, ctx),
+                Tab::Devices => ui::draw_devices(self, ui, &ctx),
+                Tab::Tv => ui::draw_tv(self, ui, &ctx),
+                Tab::Phone => ui::draw_phone(self, ui, &ctx),
+                Tab::Video => ui::draw_video(self, ui, &ctx),
+                Tab::Security => ui::draw_security(self, ui, &ctx),
+                Tab::Audit => ui::draw_audit(self, ui, &ctx),
             });
         });
 
         // Wizard overlay
-        ui::draw_wizard(self, ctx);
+        ui::draw_wizard(self, &ctx);
     }
 }

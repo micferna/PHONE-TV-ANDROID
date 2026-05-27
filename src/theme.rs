@@ -123,7 +123,7 @@ pub fn widget_bg(dark_mode: bool) -> egui::Color32 {
 // ── Theme application ───────────────────────────────────────────────
 
 pub fn apply_theme(ctx: &egui::Context, dark_mode: bool) {
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.global_style()).clone();
 
     if dark_mode {
         style.visuals = egui::Visuals::dark();
@@ -171,5 +171,5 @@ pub fn apply_theme(ctx: &egui::Context, dark_mode: bool) {
     style.visuals.widgets.active.corner_radius = cr;
     style.visuals.window_corner_radius = egui::CornerRadius::same(8);
 
-    ctx.set_style(style);
+    ctx.set_global_style(style);
 }
