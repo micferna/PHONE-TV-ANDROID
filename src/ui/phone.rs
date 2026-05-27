@@ -1,4 +1,5 @@
 use eframe::egui;
+#[cfg(target_os = "linux")]
 use std::path::Path;
 
 use crate::adb;
