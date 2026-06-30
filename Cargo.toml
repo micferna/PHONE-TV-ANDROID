@@ -10,7 +10,7 @@ readme = "README.md"
 autobenches = false
 
 [dependencies]
-eframe = "0.34"
+eframe = "0.35"
 egui_extras = { version = "0.34", features = ["all_loaders"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 dirs = "6.0"
