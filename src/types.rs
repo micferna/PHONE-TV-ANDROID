@@ -17,6 +17,15 @@ pub struct TransferState {
     pub play_after: bool,
 }
 
+/// One entry listed from a remote directory on the phone (for the "Récupérer" feature).
+#[derive(Clone)]
+pub struct RemoteEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub selected: bool,
+}
+
 #[allow(dead_code)]
 pub enum BgEvent {
     DevicesLoaded(Vec<Device>),
@@ -30,7 +39,13 @@ pub enum BgEvent {
         success: bool,
         message: String,
     },
-    WebcamSwitched(Option<Child>),
+    WebcamSwitched {
+        child: Option<Child>,
+        /// Transport scrcpy is bound to (`ip:5555` when wireless, USB serial otherwise).
+        device_id: String,
+        /// True when the stream runs over wireless ADB and survives an USB unplug.
+        wifi: bool,
+    },
     StorageInfo {
         device_id: String,
         total: String,
@@ -58,6 +73,14 @@ pub enum BgEvent {
     FileTransferDone {
         success: bool,
         message: String,
+    },
+    RemoteDirListed {
+        path: String,
+        entries: Vec<RemoteEntry>,
+    },
+    FilePullProgress {
+        done: usize,
+        total: usize,
     },
     Log(String),
     SecurityScore {

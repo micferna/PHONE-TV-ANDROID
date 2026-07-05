@@ -12,10 +12,21 @@ pub struct Settings {
     pub openrouter_api_key: String,
     #[serde(default = "default_llm_model")]
     pub llm_model: String,
+    /// Destination folder on the PC for files retrieved from the phone.
+    #[serde(default = "default_pull_dest")]
+    pub pull_dest_dir: String,
 }
 
 fn default_llm_model() -> String {
     "anthropic/claude-sonnet-4".to_string()
+}
+
+/// Default folder where retrieved files land: the OS "Downloads", else home, else cwd.
+pub fn default_pull_dest() -> String {
+    dirs::download_dir()
+        .or_else(dirs::home_dir)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| ".".to_string())
 }
 
 impl Default for Settings {
@@ -26,6 +37,7 @@ impl Default for Settings {
             window_size: (1000.0, 800.0),
             openrouter_api_key: String::new(),
             llm_model: default_llm_model(),
+            pull_dest_dir: default_pull_dest(),
         }
     }
 }

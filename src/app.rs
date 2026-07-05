@@ -32,6 +32,9 @@ pub struct PhoneTvApp {
     pub mirror_active: bool,
     // Process tracking
     pub webcam_child: Option<Child>,
+    /// Transport the live webcam is bound to (`ip:5555` once switched to WiFi).
+    /// Used so a FRONT/BACK switch restarts scrcpy on the same wireless transport.
+    pub webcam_device_id: Option<String>,
     pub mirror_child: Option<Child>,
     pub screenrecord_child: Option<Child>,
     pub screenrecord_remote: String,
@@ -82,6 +85,11 @@ pub struct PhoneTvApp {
     // File transfer (generic push/pull)
     pub pull_remote_path: String,
     pub file_transferring: bool,
+    // Retrieve from phone (pull) — directory browser
+    pub pull_entries: Vec<RemoteEntry>,
+    pub pull_listing: bool,
+    pub pull_dest_dir: String,
+    pub pull_progress: Option<(usize, usize)>,
     // Security
     pub security_view: SecurityView,
     pub security_score: Option<(u8, Vec<SecurityIssue>)>,
@@ -124,6 +132,7 @@ impl PhoneTvApp {
         let selected = if devices.is_empty() { None } else { Some(0) };
         let (bg_tx, bg_rx) = mpsc::channel();
         let dark_mode = settings.dark_mode;
+        let pull_dest_dir = settings.pull_dest_dir.clone();
         Self {
             devices,
             selected_device: selected,
@@ -139,6 +148,7 @@ impl PhoneTvApp {
             webcam_active: false,
             mirror_active: false,
             webcam_child: None,
+            webcam_device_id: None,
             mirror_child: None,
             screenrecord_child: None,
             screenrecord_remote: String::new(),
@@ -175,6 +185,10 @@ impl PhoneTvApp {
             apk_installing: false,
             pull_remote_path: "/sdcard/Download/".to_string(),
             file_transferring: false,
+            pull_entries: Vec::new(),
+            pull_listing: false,
+            pull_dest_dir,
+            pull_progress: None,
             // Security
             security_view: SecurityView::Score,
             security_score: None,
@@ -235,6 +249,7 @@ impl PhoneTvApp {
             window_size: self.settings.window_size,
             openrouter_api_key: self.settings.openrouter_api_key.clone(),
             llm_model: self.settings.llm_model.clone(),
+            pull_dest_dir: self.pull_dest_dir.clone(),
         };
         config::save_settings(&s);
     }
@@ -318,10 +333,29 @@ impl PhoneTvApp {
         });
     }
 
-    pub fn switch_camera_async(&mut self, id: String, ctx: &egui::Context) {
+    /// Start (or restart, e.g. on a FRONT/BACK switch) the webcam asynchronously.
+    ///
+    /// Switches the device onto wireless ADB first so the stream survives an USB
+    /// unplug, then launches scrcpy on that transport. Falls back to the wired
+    /// transport if the phone isn't reachable over WiFi. Reuses the already-active
+    /// wireless transport when one exists (a camera switch shouldn't re-handshake).
+    pub fn start_webcam_async(&mut self, ctx: &egui::Context) {
         if self.switching_cam {
             return;
         }
+        // Prefer the transport the webcam already runs on (WiFi), else the selection.
+        let id = match self
+            .webcam_device_id
+            .clone()
+            .or_else(|| self.get_selected_id())
+        {
+            Some(id) => id,
+            None => return,
+        };
+
+        // Only a restart (FRONT/BACK switch) needs to wait for the previous scrcpy to
+        // release the camera; a cold start can launch immediately.
+        let restarting = self.webcam_active;
         self.switching_cam = true;
         self.kill_webcam();
         let front = self.cam_front;
@@ -330,9 +364,21 @@ impl PhoneTvApp {
         let tx = self.bg_tx.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            let child = adb::start_webcam_process(&id, front, with_mic, audio_output);
-            let _ = tx.send(BgEvent::WebcamSwitched(child));
+            // Let the previous scrcpy release the camera / v4l2 sink before reopening.
+            if restarting {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+            // Move onto wireless ADB (idempotent if `id` is already `ip:5555`).
+            let (stream_id, wifi) = match adb::enable_wifi_adb(&id) {
+                Some(wid) => (wid, true),
+                None => (id.clone(), false),
+            };
+            let child = adb::start_webcam_process(&stream_id, front, with_mic, audio_output);
+            let _ = tx.send(BgEvent::WebcamSwitched {
+                child,
+                device_id: stream_id,
+                wifi,
+            });
             ctx.request_repaint();
         });
     }
@@ -352,6 +398,7 @@ impl PhoneTvApp {
     pub fn stop_all(&mut self) {
         self.switching_cam = false;
         self.kill_webcam();
+        self.webcam_device_id = None;
         self.kill_mirror();
         self.kill_tv_shell();
         self.webcam_active = false;
@@ -588,6 +635,95 @@ impl PhoneTvApp {
         });
     }
 
+    /// Normalise a remote directory path so it always ends with a single `/`.
+    pub fn normalize_remote_dir(path: &str) -> String {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            return "/sdcard/".to_string();
+        }
+        format!("{}/", trimmed.trim_end_matches('/'))
+    }
+
+    /// Parent directory of a remote path, or None when already at the root.
+    pub fn remote_parent(path: &str) -> Option<String> {
+        let trimmed = path.trim_end_matches('/');
+        if trimmed.is_empty() || trimmed == "/sdcard" {
+            return None;
+        }
+        match trimmed.rsplit_once('/') {
+            Some((parent, _)) if !parent.is_empty() => Some(format!("{}/", parent)),
+            _ => None,
+        }
+    }
+
+    /// List a remote directory in the background; result arrives via RemoteDirListed.
+    pub fn list_remote_async(&mut self, id: String, path: String, ctx: &egui::Context) {
+        if self.pull_listing {
+            return;
+        }
+        let path = Self::normalize_remote_dir(&path);
+        self.pull_listing = true;
+        self.pull_entries.clear();
+        let tx = self.bg_tx.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let entries = adb::list_remote_dir(&id, &path)
+                .into_iter()
+                .map(|(name, is_dir, size)| RemoteEntry {
+                    name,
+                    is_dir,
+                    size,
+                    selected: false,
+                })
+                .collect();
+            let _ = tx.send(BgEvent::RemoteDirListed { path, entries });
+            ctx.request_repaint();
+        });
+    }
+
+    /// Pull the given remote paths into `local_dir`; result arrives via FileTransferDone.
+    pub fn pull_files_async(
+        &mut self,
+        id: String,
+        remotes: Vec<String>,
+        local_dir: String,
+        ctx: &egui::Context,
+    ) {
+        if self.file_transferring || remotes.is_empty() {
+            return;
+        }
+        self.file_transferring = true;
+        let total = remotes.len();
+        self.pull_progress = Some((0, total));
+        self.log(&format!("Récupération de {} élément(s)...", total));
+        let tx = self.bg_tx.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let mut ok = 0usize;
+            let mut fail = 0usize;
+            let mut last_err = String::new();
+            for (i, remote) in remotes.iter().enumerate() {
+                let (success, msg) = adb::pull_file(&id, remote, &local_dir);
+                if success {
+                    ok += 1;
+                } else {
+                    fail += 1;
+                    last_err = msg;
+                }
+                let _ = tx.send(BgEvent::FilePullProgress { done: i + 1, total });
+                ctx.request_repaint();
+            }
+            let success = fail == 0;
+            let message = if success {
+                format!("{} élément(s) → {}", ok, local_dir)
+            } else {
+                format!("{} OK, {} échec(s) : {}", ok, fail, last_err)
+            };
+            let _ = tx.send(BgEvent::FileTransferDone { success, message });
+            ctx.request_repaint();
+        });
+    }
+
     fn process_bg_events(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.bg_rx.try_recv() {
             match event {
@@ -649,8 +785,13 @@ impl PhoneTvApp {
                         self.log(&format!("Échec pairing {}: {}", addr, message));
                     }
                 }
-                BgEvent::WebcamSwitched(child) => {
+                BgEvent::WebcamSwitched {
+                    child,
+                    device_id,
+                    wifi,
+                } => {
                     if !self.switching_cam {
+                        // A stop landed while we were (re)starting: discard the child.
                         if let Some(mut c) = child {
                             adb::kill_child_tree(&mut c);
                         }
@@ -658,10 +799,21 @@ impl PhoneTvApp {
                         self.webcam_child = child;
                         self.webcam_active = self.webcam_child.is_some();
                         self.switching_cam = false;
-                        self.log(&format!(
-                            "Switch → {}",
-                            if self.cam_front { "FRONT" } else { "BACK" }
-                        ));
+                        if self.webcam_active {
+                            self.webcam_device_id = Some(device_id);
+                            self.log(&format!(
+                                "Webcam {} ON {}",
+                                if self.cam_front { "FRONT" } else { "BACK" },
+                                if wifi {
+                                    "(WiFi — débranchable 🔌)"
+                                } else {
+                                    "(USB — tél injoignable en WiFi, garde le câble)"
+                                }
+                            ));
+                        } else {
+                            self.webcam_device_id = None;
+                            self.log("Échec démarrage webcam");
+                        }
                     }
                 }
                 BgEvent::StorageInfo {
@@ -702,11 +854,25 @@ impl PhoneTvApp {
                 }
                 BgEvent::FileTransferDone { success, message } => {
                     self.file_transferring = false;
+                    self.pull_progress = None;
                     if success {
-                        self.log(&format!("Transfert OK: {}", message));
+                        self.log(&format!("✓ Récupération OK: {}", message));
                     } else {
-                        self.log(&format!("Échec transfert: {}", message));
+                        self.log(&format!("✗ Échec récupération: {}", message));
                     }
+                }
+                BgEvent::FilePullProgress { done, total } => {
+                    self.pull_progress = Some((done, total));
+                }
+                BgEvent::RemoteDirListed { path, entries } => {
+                    let count = entries.len();
+                    self.pull_remote_path = path;
+                    self.pull_entries = entries;
+                    self.pull_listing = false;
+                    self.log(&format!(
+                        "{} élément(s) dans {}",
+                        count, self.pull_remote_path
+                    ));
                 }
                 BgEvent::Log(msg) => {
                     self.log(&msg);
