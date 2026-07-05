@@ -57,9 +57,7 @@ pub fn draw_phone(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                         let was_front = app.cam_front;
                         app.cam_front = false;
                         if was_front && app.webcam_active {
-                            if let Some(id) = app.get_selected_id() {
-                                app.switch_camera_async(id, ctx);
-                            }
+                            app.start_webcam_async(ctx);
                         }
                     }
                     if ui
@@ -78,9 +76,7 @@ pub fn draw_phone(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                         let was_back = !app.cam_front;
                         app.cam_front = true;
                         if was_back && app.webcam_active {
-                            if let Some(id) = app.get_selected_id() {
-                                app.switch_camera_async(id, ctx);
-                            }
+                            app.start_webcam_async(ctx);
                         }
                     }
                 });
@@ -115,22 +111,13 @@ pub fn draw_phone(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                     if app.webcam_active {
                         app.kill_webcam();
                         app.webcam_active = false;
+                        app.webcam_device_id = None;
                         app.log("Webcam stoppée");
-                    } else if let Some(ref id) = app.get_selected_id() {
-                        let child = adb::start_webcam_process(
-                            id,
-                            app.cam_front,
-                            app.with_mic,
-                            app.audio_output,
-                        );
-                        if child.is_some() {
-                            app.webcam_child = child;
-                            app.webcam_active = true;
-                            app.log(&format!(
-                                "Webcam {} ON",
-                                if app.cam_front { "FRONT" } else { "BACK" }
-                            ));
-                        }
+                    } else {
+                        // Switches to wireless ADB then launches scrcpy, so the cable
+                        // can be unplugged without cutting the stream.
+                        app.log("Démarrage webcam (bascule WiFi)…");
+                        app.start_webcam_async(ctx);
                     }
                 }
 
