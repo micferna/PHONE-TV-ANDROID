@@ -184,4 +184,354 @@ pub fn draw_video(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                 }
             }
         });
+
+    ui.add_space(8.0);
+
+    // === Retrieve from phone (pull) ===
+    draw_retrieve(app, ui, ctx);
+}
+
+#[derive(Clone, Copy)]
+enum PullKind {
+    Selection,
+    Whole,
+}
+
+/// Human-readable byte size (o / Ko / Mo / Go / To).
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["o", "Ko", "Mo", "Go", "To"];
+    let mut v = bytes as f64;
+    let mut u = 0;
+    while v >= 1024.0 && u < UNITS.len() - 1 {
+        v /= 1024.0;
+        u += 1;
+    }
+    if u == 0 {
+        format!("{} {}", bytes, UNITS[0])
+    } else {
+        format!("{:.1} {}", v, UNITS[u])
+    }
+}
+
+fn draw_retrieve(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+    let selected_id = app.get_selected_id();
+
+    // Deferred actions, applied after the frame closure to avoid borrow conflicts.
+    let mut list_path: Option<String> = None;
+    let mut navigate_into: Option<String> = None;
+    let mut pull_action: Option<PullKind> = None;
+    let mut save_dest = false;
+
+    egui::Frame::NONE
+        .corner_radius(8.0)
+        .inner_margin(12.0)
+        .fill(theme::card_bg(app.dark_mode))
+        .stroke(egui::Stroke::new(0.5, theme::card_border(app.dark_mode)))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(
+                egui::RichText::new("📥 Récupérer du téléphone")
+                    .strong()
+                    .size(14.0),
+            );
+            ui.add_space(6.0);
+
+            // ── Quick folder shortcuts ──────────────────────────────
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("📱 /sdcard").clicked() {
+                    list_path = Some("/sdcard/".to_string());
+                }
+                if ui.button("🎬 Movies").clicked() {
+                    list_path = Some("/sdcard/Movies/".to_string());
+                }
+                if ui.button("📷 DCIM").clicked() {
+                    list_path = Some("/sdcard/DCIM/".to_string());
+                }
+                if ui.button("⬇ Download").clicked() {
+                    list_path = Some("/sdcard/Download/".to_string());
+                }
+            });
+
+            ui.add_space(4.0);
+
+            // ── Current path: editable field + open + refresh ───────
+            ui.horizontal(|ui| {
+                let path_width = (ui.available_width() - 130.0).max(100.0);
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut app.pull_remote_path)
+                        .hint_text("/sdcard/...")
+                        .desired_width(path_width),
+                );
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    list_path = Some(app.pull_remote_path.clone());
+                }
+                if ui.button("📂 Ouvrir").clicked() {
+                    list_path = Some(app.pull_remote_path.clone());
+                }
+                if !app.pull_entries.is_empty()
+                    && ui.button("↻").on_hover_text("Rafraîchir").clicked()
+                {
+                    list_path = Some(app.pull_remote_path.clone());
+                }
+            });
+
+            // ── Clickable breadcrumb of the current location ────────
+            if !app.pull_entries.is_empty() || app.pull_listing {
+                ui.add_space(2.0);
+                let path = PhoneTvApp::normalize_remote_dir(&app.pull_remote_path);
+                let trimmed = path.trim_matches('/');
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    if ui.small_button("📱").on_hover_text("/sdcard").clicked() {
+                        list_path = Some("/sdcard/".to_string());
+                    }
+                    let mut acc = String::new();
+                    for part in trimmed.split('/').filter(|p| !p.is_empty()) {
+                        ui.label(
+                            egui::RichText::new("/")
+                                .color(theme::text_secondary(app.dark_mode)),
+                        );
+                        acc.push('/');
+                        acc.push_str(part);
+                        if ui.small_button(part).clicked() {
+                            list_path = Some(format!("{}/", acc));
+                        }
+                    }
+                });
+            }
+
+            ui.add_space(6.0);
+
+            // ── Body: loading / listing / empty ─────────────────────
+            if app.pull_listing {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Chargement du dossier...");
+                });
+                ctx.request_repaint();
+            } else if !app.pull_entries.is_empty() {
+                // Parent navigation
+                if let Some(parent) = PhoneTvApp::remote_parent(&app.pull_remote_path) {
+                    if ui
+                        .button(egui::RichText::new("⬆ .. (dossier parent)").small())
+                        .clicked()
+                    {
+                        list_path = Some(parent);
+                    }
+                }
+
+                // Selection helpers + running totals
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("☑ Tout").clicked() {
+                        for e in app.pull_entries.iter_mut() {
+                            if !e.is_dir {
+                                e.selected = true;
+                            }
+                        }
+                    }
+                    if ui.button("☐ Aucun").clicked() {
+                        for e in app.pull_entries.iter_mut() {
+                            e.selected = false;
+                        }
+                    }
+                    let n = app.pull_entries.iter().filter(|e| e.selected).count();
+                    let files = app.pull_entries.iter().filter(|e| !e.is_dir).count();
+                    let sel_size: u64 = app
+                        .pull_entries
+                        .iter()
+                        .filter(|e| e.selected)
+                        .map(|e| e.size)
+                        .sum();
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}/{} fichier(s) · {}",
+                            n,
+                            files,
+                            human_size(sel_size)
+                        ))
+                        .small()
+                        .color(theme::text_secondary(app.dark_mode)),
+                    );
+                });
+
+                ui.add_space(4.0);
+
+                // File / directory list with sizes
+                egui::ScrollArea::vertical()
+                    .max_height(240.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for e in app.pull_entries.iter_mut() {
+                            ui.horizontal(|ui| {
+                                if e.is_dir {
+                                    if ui
+                                        .button(format!("📁 {}", e.name))
+                                        .on_hover_text("Ouvrir ce dossier")
+                                        .clicked()
+                                    {
+                                        navigate_into = Some(e.name.clone());
+                                    }
+                                } else {
+                                    ui.checkbox(&mut e.selected, format!("📄 {}", e.name));
+                                    ui.label(
+                                        egui::RichText::new(human_size(e.size))
+                                            .small()
+                                            .color(theme::text_secondary(app.dark_mode)),
+                                    );
+                                }
+                            });
+                        }
+                    });
+
+                ui.add_space(8.0);
+
+                // ── Destination on the PC (saved between sessions) ──
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("💾 Vers PC :").small());
+                    let dest_width = (ui.available_width() - 50.0).max(100.0);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut app.pull_dest_dir)
+                            .hint_text("dossier de destination...")
+                            .desired_width(dest_width),
+                    );
+                    if ui.button("📂").on_hover_text("Choisir le dossier").clicked() {
+                        if let Some(dir) = rfd::FileDialog::new()
+                            .set_title("Dossier de destination sur le PC")
+                            .pick_folder()
+                        {
+                            app.pull_dest_dir = dir.display().to_string();
+                            save_dest = true;
+                        }
+                    }
+                });
+
+                ui.add_space(6.0);
+
+                // ── Pull actions ────────────────────────────────────
+                let any_selected = app.pull_entries.iter().any(|e| e.selected);
+                let busy = app.file_transferring;
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_enabled_ui(any_selected && !busy, |ui| {
+                        if ui
+                            .add_sized(
+                                [190.0, 34.0],
+                                egui::Button::new("📥 Récupérer la sélection")
+                                    .fill(theme::success_color()),
+                            )
+                            .clicked()
+                        {
+                            pull_action = Some(PullKind::Selection);
+                        }
+                    });
+                    ui.add_enabled_ui(!busy, |ui| {
+                        if ui
+                            .add_sized(
+                                [160.0, 34.0],
+                                egui::Button::new("📥 Tout le dossier").fill(theme::accent_color()),
+                            )
+                            .clicked()
+                        {
+                            pull_action = Some(PullKind::Whole);
+                        }
+                    });
+                });
+
+                // ── Progress ────────────────────────────────────────
+                if let Some((done, total)) = app.pull_progress {
+                    ui.add_space(4.0);
+                    let frac = if total > 0 {
+                        done as f32 / total as f32
+                    } else {
+                        0.0
+                    };
+                    ui.add(
+                        egui::ProgressBar::new(frac)
+                            .text(format!("{}/{} fichier(s)", done, total))
+                            .fill(theme::accent_color())
+                            .animate(true),
+                    );
+                    ctx.request_repaint();
+                }
+            } else {
+                // Empty state: one prominent button to open the phone storage.
+                ui.add_space(2.0);
+                if ui
+                    .add_sized(
+                        [220.0, 36.0],
+                        egui::Button::new("📂 Parcourir le téléphone")
+                            .fill(theme::accent_color()),
+                    )
+                    .clicked()
+                {
+                    list_path = Some("/sdcard/".to_string());
+                }
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("Ouvre le stockage, navigue dans les dossiers, coche les fichiers à rapatrier.")
+                        .small()
+                        .color(theme::text_secondary(app.dark_mode)),
+                );
+            }
+        });
+
+    // Persist the destination folder when it was changed via the picker.
+    if save_dest {
+        app.save_settings();
+    }
+
+    // Resolve a directory click into a list request for the sub-folder.
+    if let Some(name) = navigate_into {
+        let base = PhoneTvApp::normalize_remote_dir(&app.pull_remote_path);
+        list_path = Some(format!("{}{}", base, name));
+    }
+
+    // Apply a (re)list request.
+    if let Some(path) = list_path {
+        match selected_id.clone() {
+            Some(id) => app.list_remote_async(id, path, ctx),
+            None => app.log("⚠ Aucun appareil sélectionné"),
+        }
+    }
+
+    // Apply a pull request straight to the saved PC folder (no dialog → quick).
+    if let Some(kind) = pull_action {
+        if let Some(id) = selected_id {
+            let base = PhoneTvApp::normalize_remote_dir(&app.pull_remote_path);
+            let remotes: Vec<String> = match kind {
+                PullKind::Selection => app
+                    .pull_entries
+                    .iter()
+                    .filter(|e| e.selected)
+                    .map(|e| format!("{}{}", base, e.name))
+                    .collect(),
+                PullKind::Whole => {
+                    vec![app.pull_remote_path.trim_end_matches('/').to_string()]
+                }
+            };
+
+            if remotes.is_empty() {
+                app.log("⚠ Rien à récupérer");
+            } else {
+                // Fall back to a folder picker only if no destination is set.
+                let mut dest = app.pull_dest_dir.trim().to_string();
+                if dest.is_empty() {
+                    dest = rfd::FileDialog::new()
+                        .set_title("Dossier de destination sur le PC")
+                        .pick_folder()
+                        .map(|d| d.display().to_string())
+                        .unwrap_or_default();
+                }
+                if dest.is_empty() {
+                    app.log("⚠ Aucun dossier de destination");
+                } else {
+                    let _ = std::fs::create_dir_all(&dest);
+                    app.pull_dest_dir = dest.clone();
+                    app.save_settings();
+                    app.pull_files_async(id, remotes, dest, ctx);
+                }
+            }
+        } else {
+            app.log("⚠ Aucun appareil sélectionné");
+        }
+    }
 }
