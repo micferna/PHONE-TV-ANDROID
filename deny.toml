@@ -26,6 +26,10 @@ ignore = [
     # pins ^0.39. Re-evaluate when wayland-scanner bumps quick-xml.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # RUSTSEC-2026-0192 — ttf-parser is unmaintained (informational, not a
+    # vulnerability). Pulled by egui's text stack (epaint -> ab_glyph ->
+    # owned_ttf_parser); no alternative until egui switches font parsers.
+    "RUSTSEC-2026-0192",
 ]
 
 [licenses]
