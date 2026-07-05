@@ -18,6 +18,14 @@ ignore = [
     # quinn-proto still pins rand 0.9.2. Re-evaluate when quinn ships
     # rand 0.9.3+ and when egui_extras drops phf via mime_guess2.
     "RUSTSEC-2026-0097",
+    # RUSTSEC-2026-0194 / RUSTSEC-2026-0195 — quick-xml DoS issues (quadratic
+    # attribute checks, unbounded namespace allocations) on attacker-controlled
+    # XML. Only pulled at build time by wayland-scanner to parse the Wayland
+    # protocol XML bundled in the wayland crates — trusted input, never user
+    # data. Fixed in quick-xml >=0.41, but wayland-scanner (0.31.10, latest)
+    # pins ^0.39. Re-evaluate when wayland-scanner bumps quick-xml.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
 ]
 
 [licenses]
