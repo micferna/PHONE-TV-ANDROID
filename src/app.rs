@@ -1157,7 +1157,7 @@ impl eframe::App for PhoneTvApp {
                     .inner_margin(10.0)
                     .fill(theme::sidebar_fill(self.dark_mode)),
             )
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 ui::draw_sidebar(self, ui, &ctx);
             });
 
@@ -1173,7 +1173,7 @@ impl eframe::App for PhoneTvApp {
                     .fill(theme::sidebar_fill(self.dark_mode))
                     .stroke(egui::Stroke::new(1.0, theme::card_border(self.dark_mode))),
             )
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 let log_count = self.logs.len();
                 ui.horizontal(|ui| {
                     let arrow = if self.logs_collapsed { "▶" } else { "▼" };
@@ -1234,7 +1234,7 @@ impl eframe::App for PhoneTvApp {
             });
 
         // Central panel: tab content
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| match self.active_tab {
                 Tab::Devices => ui::draw_devices(self, ui, &ctx),
                 Tab::Tv => ui::draw_tv(self, ui, &ctx),
