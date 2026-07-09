@@ -14,6 +14,13 @@ use crate::types::*;
 use crate::ui;
 use crate::wizard::types::WizardState;
 
+/// Face unlock evicts scrcpy from the camera on every lock-screen wake, so a webcam
+/// session legitimately needs restarting now and then. Cap consecutive restarts of a
+/// stream that never got going, to avoid spinning against a permanently busy camera.
+const MAX_WEBCAM_AUTO_RESTARTS: u32 = 3;
+/// Uptime past which a stream counts as healthy, clearing the restart budget.
+const WEBCAM_HEALTHY_UPTIME: std::time::Duration = std::time::Duration::from_secs(20);
+
 pub struct PhoneTvApp {
     pub devices: Vec<Device>,
     pub selected_device: Option<usize>,
@@ -35,6 +42,11 @@ pub struct PhoneTvApp {
     /// Transport the live webcam is bound to (`ip:5555` once switched to WiFi).
     /// Used so a FRONT/BACK switch restarts scrcpy on the same wireless transport.
     pub webcam_device_id: Option<String>,
+    /// When the live scrcpy came up, so a stream that ran a while before dying is
+    /// treated as a one-off eviction rather than as a restart loop.
+    pub webcam_started_at: Option<std::time::Instant>,
+    /// Consecutive restarts after a short-lived stream; reset by any user action.
+    pub webcam_auto_restarts: u32,
     pub mirror_child: Option<Child>,
     pub screenrecord_child: Option<Child>,
     pub screenrecord_remote: String,
@@ -149,6 +161,8 @@ impl PhoneTvApp {
             mirror_active: false,
             webcam_child: None,
             webcam_device_id: None,
+            webcam_started_at: None,
+            webcam_auto_restarts: 0,
             mirror_child: None,
             screenrecord_child: None,
             screenrecord_remote: String::new(),
@@ -340,6 +354,12 @@ impl PhoneTvApp {
     /// transport if the phone isn't reachable over WiFi. Reuses the already-active
     /// wireless transport when one exists (a camera switch shouldn't re-handshake).
     pub fn start_webcam_async(&mut self, ctx: &egui::Context) {
+        // A user-driven start/switch clears the auto-restart budget.
+        self.webcam_auto_restarts = 0;
+        self.spawn_webcam(ctx);
+    }
+
+    fn spawn_webcam(&mut self, ctx: &egui::Context) {
         if self.switching_cam {
             return;
         }
@@ -384,6 +404,7 @@ impl PhoneTvApp {
     }
 
     pub fn kill_webcam(&mut self) {
+        self.webcam_started_at = None;
         if let Some(mut child) = self.webcam_child.take() {
             adb::kill_child_tree(&mut child);
         }
@@ -800,6 +821,7 @@ impl PhoneTvApp {
                         self.webcam_active = self.webcam_child.is_some();
                         self.switching_cam = false;
                         if self.webcam_active {
+                            self.webcam_started_at = Some(std::time::Instant::now());
                             self.webcam_device_id = Some(device_id);
                             self.log(&format!(
                                 "Webcam {} ON {}",
@@ -1072,13 +1094,34 @@ impl PhoneTvApp {
         }
     }
 
-    fn check_children(&mut self) {
-        if let Some(ref mut child) = self.webcam_child {
-            if let Ok(Some(_status)) = child.try_wait() {
-                self.webcam_child = None;
-                if self.webcam_active {
-                    self.webcam_active = false;
-                    self.log("Webcam fermée");
+    fn check_children(&mut self, ctx: &egui::Context) {
+        // A user-stopped webcam has already had its child taken, so a child that
+        // exits while `webcam_active` died on its own — most often evicted from the
+        // camera by the phone's face-unlock HAL on a lock-screen wake.
+        let webcam_died = self
+            .webcam_child
+            .as_mut()
+            .is_some_and(|c| matches!(c.try_wait(), Ok(Some(_))));
+        if webcam_died {
+            self.webcam_child = None;
+            if self.webcam_active {
+                self.webcam_active = false;
+                // A stream that ran a while was a healthy one: don't count its loss
+                // against a phone that refuses to hand the camera over at all.
+                if self
+                    .webcam_started_at
+                    .is_some_and(|t| t.elapsed() >= WEBCAM_HEALTHY_UPTIME)
+                {
+                    self.webcam_auto_restarts = 0;
+                }
+                self.webcam_started_at = None;
+
+                if self.webcam_auto_restarts < MAX_WEBCAM_AUTO_RESTARTS {
+                    self.webcam_auto_restarts += 1;
+                    self.log("Flux caméra coupé (caméra prise par le téléphone) — relance…");
+                    self.spawn_webcam(ctx);
+                } else {
+                    self.log("Webcam fermée — la caméra reste occupée sur le téléphone");
                 }
             }
         }
@@ -1098,7 +1141,7 @@ impl eframe::App for PhoneTvApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.process_bg_events(&ctx);
-        self.check_children();
+        self.check_children(&ctx);
 
         // Guard: if active tab is disabled, fallback to Devices
         if !self.tab_enabled(self.active_tab) {
