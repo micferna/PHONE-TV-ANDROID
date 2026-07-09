@@ -476,6 +476,19 @@ fn scrcpy_command() -> Command {
     }
 }
 
+/// Phones with a single system-wide camera slot (the Unisoc-based moto g14, among
+/// others) let a vendor HAL evict any other camera client. Face unlock does exactly
+/// that on every lock-screen wake, then holds the sensor for a few seconds. A scrcpy
+/// started inside that window dies immediately with "the system-wide limit for number
+/// of open cameras has been reached", so give each attempt time to fail and retry
+/// until the sensor comes back. Bounded, so a phone that never yields still gives up.
+const WEBCAM_ATTEMPTS: u32 = 5;
+/// How long a freshly spawned scrcpy must stay alive before we call it started.
+/// A camera-busy scrcpy exits well inside this window.
+const WEBCAM_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
+const WEBCAM_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Blocks for up to ~30s while retrying; call it off the UI thread.
 pub fn start_webcam_process(
     id: &str,
     front: bool,
@@ -506,12 +519,24 @@ pub fn start_webcam_process(
         args.push("--no-audio".to_string());
     }
 
-    let child = scrcpy_command().args(&args).spawn().ok();
-    #[cfg(target_os = "linux")]
-    if child.is_some() {
-        ensure_pipewire_camera_node();
+    for attempt in 1..=WEBCAM_ATTEMPTS {
+        // A failure to spawn at all means no scrcpy binary: retrying won't help.
+        let mut child = scrcpy_command().args(&args).spawn().ok()?;
+        std::thread::sleep(WEBCAM_SETTLE);
+        match child.try_wait() {
+            Ok(None) => {
+                #[cfg(target_os = "linux")]
+                ensure_pipewire_camera_node();
+                return Some(child);
+            }
+            Ok(Some(_)) => {} // already reaped
+            Err(_) => kill_child_tree(&mut child),
+        }
+        if attempt < WEBCAM_ATTEMPTS {
+            std::thread::sleep(WEBCAM_RETRY_DELAY);
+        }
     }
-    child
+    None
 }
 
 /// With v4l2loopback `exclusive_caps=1`, /dev/video10 only advertises capture
