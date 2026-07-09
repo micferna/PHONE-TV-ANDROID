@@ -1,5 +1,7 @@
 use std::path::Path;
 use std::process::{Child, Command};
+#[cfg(target_os = "linux")]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::types::{Device, DeviceType, TransferState};
@@ -488,6 +490,20 @@ const WEBCAM_ATTEMPTS: u32 = 5;
 const WEBCAM_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
 const WEBCAM_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// The v4l2loopback device scrcpy writes to.
+#[cfg(target_os = "linux")]
+const WEBCAM_SINK: &str = "/dev/video10";
+/// Devices the fan-out copies frames to, one per consuming application: a device
+/// serves exactly one, so this is the cap on how many apps can use the camera at
+/// once. Declared in /etc/modprobe.d/v4l2loopback.conf; missing ones are skipped.
+#[cfg(target_os = "linux")]
+const FANOUT_SINKS: [&str; 4] = [
+    "/dev/video12",
+    "/dev/video13",
+    "/dev/video14",
+    "/dev/video15",
+];
+
 /// Blocks for up to ~30s while retrying; call it off the UI thread.
 pub fn start_webcam_process(
     id: &str,
@@ -508,7 +524,7 @@ pub fn start_webcam_process(
     // Windows/macOS: just show a scrcpy window; the user routes it to a virtual
     // camera via OBS Virtual Camera (or equivalent).
     #[cfg(target_os = "linux")]
-    args.push("--v4l2-sink=/dev/video10".to_string());
+    args.push(format!("--v4l2-sink={WEBCAM_SINK}"));
 
     if with_mic {
         args.push("--audio-source=mic".to_string());
@@ -526,7 +542,12 @@ pub fn start_webcam_process(
         match child.try_wait() {
             Ok(None) => {
                 #[cfg(target_os = "linux")]
-                ensure_pipewire_camera_node();
+                {
+                    // Before the PipeWire check: the nodes it waits for are the
+                    // fan-out sinks, which only advertise capture once ffmpeg writes.
+                    start_webcam_fanout();
+                    ensure_pipewire_camera_node();
+                }
                 return Some(child);
             }
             Ok(Some(_)) => {} // already reaped
@@ -539,22 +560,133 @@ pub fn start_webcam_process(
     None
 }
 
-/// With v4l2loopback `exclusive_caps=1`, /dev/video10 only advertises capture
-/// capabilities while scrcpy is writing to it. If WirePlumber probed the device
+/// v4l2loopback hands out a single capture token per device (`V4L2L_TOKEN_CAPTURE`
+/// is one bit, granted once), so exactly one application can stream from a given
+/// device; every other reader's S_FMT/REQBUFS fails with -EBUSY. `max_openers` does
+/// not help: it only bounds open(), which is all an app needs to *enumerate* the
+/// camera. So Firefox and Discord can never share /dev/video10 directly.
+///
+/// Read the sink once and copy the frames out to a dedicated device per application:
+///
+///   scrcpy -> /dev/video10 -> ffmpeg -+-> /dev/video12
+///                                     `-> /dev/video13
+///
+/// Each application then takes the token of *its own* device. Frames are copied, not
+/// re-encoded. Mirrors scripts/webcam-fanout.sh, which does the same thing by hand.
+#[cfg(target_os = "linux")]
+static FANOUT: Mutex<Option<Child>> = Mutex::new(None);
+/// Bumped on every start/stop so a fan-out that finishes spawning after its webcam
+/// was already stopped kills itself instead of leaking an orphan ffmpeg.
+#[cfg(target_os = "linux")]
+static FANOUT_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// scrcpy may not have opened the sink yet when we first try, and ffmpeg then exits
+/// immediately: retry a few times.
+#[cfg(target_os = "linux")]
+const FANOUT_ATTEMPTS: u32 = 5;
+#[cfg(target_os = "linux")]
+const FANOUT_SETTLE: std::time::Duration = std::time::Duration::from_millis(1500);
+#[cfg(target_os = "linux")]
+const FANOUT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The devices applications are meant to consume. Falls back to the raw scrcpy sink
+/// when no fan-out device exists, which is the pre-fan-out single-consumer behaviour.
+#[cfg(target_os = "linux")]
+fn consumer_devices() -> Vec<&'static str> {
+    let sinks: Vec<&'static str> = FANOUT_SINKS
+        .iter()
+        .copied()
+        .filter(|s| Path::new(s).exists())
+        .collect();
+    if sinks.is_empty() {
+        vec![WEBCAM_SINK]
+    } else {
+        sinks
+    }
+}
+
+/// Non-blocking: the fan-out comes up on its own thread.
+#[cfg(target_os = "linux")]
+fn start_webcam_fanout() {
+    stop_webcam_fanout();
+    let sinks = consumer_devices();
+    if sinks == [WEBCAM_SINK] {
+        return; // rien à dupliquer
+    }
+    let generation = FANOUT_GEN.load(Ordering::SeqCst);
+
+    std::thread::spawn(move || {
+        for attempt in 1..=FANOUT_ATTEMPTS {
+            let mut cmd = Command::new("ffmpeg");
+            cmd.args(["-loglevel", "error", "-f", "v4l2", "-i", WEBCAM_SINK]);
+            for sink in &sinks {
+                cmd.args(["-map", "0:v", "-f", "v4l2", "-pix_fmt", "yuv420p", sink]);
+            }
+            // No ffmpeg on the box: retrying won't conjure one.
+            let Ok(mut child) = cmd
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            else {
+                return;
+            };
+
+            std::thread::sleep(FANOUT_SETTLE);
+            if matches!(child.try_wait(), Ok(None)) {
+                let mut slot = match FANOUT.lock() {
+                    Ok(slot) => slot,
+                    Err(_) => return,
+                };
+                // Stopped while we were settling: don't resurrect it.
+                if FANOUT_GEN.load(Ordering::SeqCst) != generation {
+                    drop(slot);
+                    kill_child_tree(&mut child);
+                    return;
+                }
+                *slot = Some(child);
+                return;
+            }
+            kill_child_tree(&mut child);
+            if attempt < FANOUT_ATTEMPTS {
+                std::thread::sleep(FANOUT_RETRY_DELAY);
+            }
+        }
+    });
+}
+
+#[cfg(target_os = "linux")]
+pub fn stop_webcam_fanout() {
+    if let Ok(mut slot) = FANOUT.lock() {
+        // Under the lock, so an in-flight start_webcam_fanout thread observes the
+        // bump before it can store its child.
+        FANOUT_GEN.fetch_add(1, Ordering::SeqCst);
+        if let Some(mut child) = slot.take() {
+            drop(slot);
+            kill_child_tree(&mut child);
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn stop_webcam_fanout() {}
+
+/// With v4l2loopback `exclusive_caps=1`, a loopback device only advertises capture
+/// capabilities while something is writing to it. If WirePlumber probed the device
 /// before the stream existed (e.g. right after boot), it never creates the
 /// PipeWire source node, and browsers that enumerate cameras through PipeWire
 /// (Firefox) don't see the camera even though direct-V4L2 apps (Discord) do.
-/// Once the stream is up, restart WirePlumber so it re-probes the device.
+/// Once the stream is up, restart WirePlumber so it re-probes the devices.
 #[cfg(target_os = "linux")]
 fn ensure_pipewire_camera_node() {
     std::thread::spawn(|| {
         for i in 0..10 {
             std::thread::sleep(std::time::Duration::from_secs(2));
-            if pipewire_has_video10_source() {
+            if pipewire_has_camera_sources() {
                 return;
             }
-            // Two attempts: scrcpy may not have opened the sink yet at the
-            // first check, so a restart then would re-probe a still-idle device.
+            // Two attempts: scrcpy/ffmpeg may not have opened the sinks yet at the
+            // first check, so a restart then would re-probe still-idle devices.
             if i == 1 || i == 4 {
                 let _ = Command::new("systemctl")
                     .args(["--user", "restart", "wireplumber"])
@@ -564,21 +696,25 @@ fn ensure_pipewire_camera_node() {
     });
 }
 
+/// True once every device an application could pick has a PipeWire source node.
 #[cfg(target_os = "linux")]
-fn pipewire_has_video10_source() -> bool {
+fn pipewire_has_camera_sources() -> bool {
     let Ok(out) = Command::new("pw-dump").output() else {
         return true; // pas de PipeWire → rien à réparer
     };
     let Ok(objects) = serde_json::from_slice::<serde_json::Value>(&out.stdout) else {
         return true;
     };
-    objects.as_array().is_some_and(|objs| {
+    let Some(objs) = objects.as_array() else {
+        return true;
+    };
+    consumer_devices().iter().all(|dev| {
         objs.iter().any(|o| {
             let props = &o["info"]["props"];
             props["media.class"] == "Video/Source"
                 && props["object.path"]
                     .as_str()
-                    .is_some_and(|p| p.contains("/dev/video10"))
+                    .is_some_and(|p| p.contains(dev))
         })
     })
 }

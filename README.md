@@ -11,7 +11,7 @@ Application de bureau en Rust pour contrôler vos téléphones et TV Android dep
 ## Fonctionnalités
 
 **Contrôle Téléphone :**
-- Streaming webcam (caméra avant/arrière) vers un périphérique virtuel v4l2loopback (`/dev/video10`) pour Discord, OBS, etc.
+- Streaming webcam (caméra avant/arrière) vers des périphériques virtuels v4l2loopback, jusqu'à 4 applications simultanées (Discord, OBS, navigateur…)
 - Capture micro optionnelle (micro du téléphone ou audio des apps)
 - Mirroring d'écran via scrcpy
 - Transfert de fichiers vidéo vers le téléphone avec suivi de progression
@@ -123,9 +123,35 @@ sudo ./setup-webcam.sh
 ```
 
 Ce script :
-- Charge le module `v4l2loopback` avec `/dev/video10` comme "Phone-Cam"
+- Charge le module `v4l2loopback` avec une source `Phone-Cam-SRC` (`/dev/video10`) et
+  quatre sorties `Phone-Cam-1` à `Phone-Cam-4` (`/dev/video12` à `/dev/video15`)
 - Crée un sink audio virtuel "Phone-Mic" via PipeWire/PulseAudio
 - Crée une source remappée "Phone-Mic-Input"
+
+### Pourquoi plusieurs périphériques ?
+
+`v4l2loopback` n'accorde qu'un **seul jeton de capture par périphérique** : une seule
+application peut lire un `/dev/videoN` donné, toutes les autres reçoivent `-EBUSY`.
+Le paramètre `max_openers` ne change rien, il ne borne que `open()`, ce qui suffit à
+*énumérer* la caméra mais pas à la lire.
+
+Phone-TV contourne cela en lisant la source une fois et en recopiant les images vers
+un périphérique par application :
+
+```
+scrcpy ──> Phone-Cam-SRC ──> ffmpeg ──┬──> Phone-Cam-1   (Discord)
+           /dev/video10               ├──> Phone-Cam-2   (Firefox)
+                                      ├──> Phone-Cam-3   (OBS)
+                                      └──> Phone-Cam-4
+```
+
+Ce « fan-out » démarre et s'arrête avec la webcam. Il n'y a pas de ré-encodage, les
+images sont copiées telles quelles. **Ne choisissez jamais `Phone-Cam-SRC` dans une
+application** : elle confisquerait le jeton de la source. Le nombre de sorties fixe le
+nombre d'applications simultanées ; pour en ajouter, étendez `video_nr` dans
+`/etc/modprobe.d/v4l2loopback.conf` *et* `FANOUT_SINKS` dans `src/adb.rs`.
+
+Le script `scripts/webcam-fanout.sh` fait la même chose à la main, hors de l'app.
 
 ## Utilisation
 
@@ -145,7 +171,12 @@ Ou directement le binaire :
 2. Lancez `sudo ./setup-webcam.sh`
 3. Lancez l'application et sélectionnez votre appareil
 4. Cochez les options micro si nécessaire, puis cliquez **"Démarrer Webcam"**
-5. Dans Discord, sélectionnez **"Phone-Cam"** comme caméra et **"Phone-Mic-Input"** comme micro
+5. Dans Discord, sélectionnez **"Phone-Cam-1"** comme caméra et **"Phone-Mic-Input"** comme micro
+
+Pour une seconde application en même temps (navigateur, OBS…), choisissez-y
+**"Phone-Cam-2"**, puis **"Phone-Cam-3"** pour une troisième : une caméra par
+application. Une application lancée avant la webcam doit ré-énumérer ses périphériques
+(rouvrir ses paramètres vidéo, ou `Ctrl+R` dans Discord) pour les voir apparaître.
 
 ### Télécommande TV
 

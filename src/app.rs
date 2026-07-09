@@ -405,6 +405,7 @@ impl PhoneTvApp {
 
     pub fn kill_webcam(&mut self) {
         self.webcam_started_at = None;
+        adb::stop_webcam_fanout();
         if let Some(mut child) = self.webcam_child.take() {
             adb::kill_child_tree(&mut child);
         }
@@ -814,6 +815,7 @@ impl PhoneTvApp {
                     if !self.switching_cam {
                         // A stop landed while we were (re)starting: discard the child.
                         if let Some(mut c) = child {
+                            adb::stop_webcam_fanout();
                             adb::kill_child_tree(&mut c);
                         }
                     } else {
@@ -1104,6 +1106,8 @@ impl PhoneTvApp {
             .is_some_and(|c| matches!(c.try_wait(), Ok(Some(_))));
         if webcam_died {
             self.webcam_child = None;
+            // The sink lost its writer: ffmpeg is now reading a dead device.
+            adb::stop_webcam_fanout();
             if self.webcam_active {
                 self.webcam_active = false;
                 // A stream that ran a while was a healthy one: don't count its loss
