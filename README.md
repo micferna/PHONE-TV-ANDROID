@@ -160,6 +160,36 @@ Ou directement le binaire :
 3. Cliquez **"Envoyer+Lire"** pour transférer et lancer automatiquement la lecture
 4. La barre de progression affiche l'état du transfert en temps réel
 
+## Dashboard de sauvegarde (`scripts/backup-dashboard.py`)
+
+Interface web locale pour parcourir les sauvegardes du téléphone (SMS, contacts,
+journal d'appels, positions, médias) et, si l'appareil est branché, envoyer un SMS
+ou passer un appel.
+
+```bash
+python3 scripts/backup-dashboard.py
+# → http://127.0.0.1:8042/?token=<jeton>
+```
+
+Le lien affiché au démarrage **contient le jeton de session** : c'est lui qui donne
+accès, ouvrez-le tel quel. Le jeton est régénéré à chaque lancement ; fixez-le avec
+`DASHBOARD_TOKEN=…` pour garder un signet valable.
+
+Ce que le dashboard expose justifie ses réglages par défaut :
+
+| Variable | Défaut | Rôle |
+| --- | --- | --- |
+| `DASHBOARD_HOST` | `127.0.0.1` | Interface d'écoute. **Ne la changez pas** sans mesurer la portée : sur `0.0.0.0`, tout le réseau lit vos SMS et peut passer des appels. |
+| `DASHBOARD_PORT` | `8042` | Port d'écoute. |
+| `DASHBOARD_TOKEN` | aléatoire | Jeton de session. |
+
+Pour y accéder depuis une autre machine, passez par un tunnel SSH plutôt que par une
+écoute ouverte :
+
+```bash
+ssh -N -L 8042:127.0.0.1:8042 utilisateur@le-pc
+```
+
 ## Dépendances Rust
 
 | Crate | Version | Description |

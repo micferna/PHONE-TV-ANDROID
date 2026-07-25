@@ -134,6 +134,12 @@ pub fn open_mic(id: &str) {
     );
 }
 
+/// Ask the device to open `url` in a video player.
+///
+/// The URL reaches the device's shell, so it is quoted like any other untrusted
+/// argument (see [`send_text_to_device`]). `video/*` is quoted too: unquoted, the
+/// device shell would glob it, and it only survived because the pattern happens to
+/// match nothing in adbd's working directory.
 pub fn play_video_url(id: &str, url: &str) {
     adb_fire(
         id,
@@ -144,9 +150,9 @@ pub fn play_video_url(id: &str, url: &str) {
             "-a",
             "android.intent.action.VIEW",
             "-d",
-            url,
+            &shell_quote(url),
             "-t",
-            "video/*",
+            "'video/*'",
         ],
     );
 }
@@ -183,9 +189,10 @@ pub fn start_transfer(
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
 
-        if let Some(output) =
-            adb_device(&monitor_id, &["shell", "stat", "-c", "%s", &monitor_remote])
-        {
+        if let Some(output) = adb_device(
+            &monitor_id,
+            &["shell", "stat", "-c", "%s", &shell_quote(&monitor_remote)],
+        ) {
             if let Ok(size) = output.trim().parse::<u64>() {
                 if let Ok(mut t) = monitor_state.lock() {
                     t.transferred_bytes = size;
@@ -215,6 +222,8 @@ pub fn start_transfer(
             t.done = true;
 
             if success && t.play_after {
+                // `remote` carries the local filename the user picked, so it is
+                // quoted for the device shell like any other untrusted argument.
                 let _ = Command::new("adb")
                     .args([
                         "-s",
@@ -225,9 +234,9 @@ pub fn start_transfer(
                         "-a",
                         "android.intent.action.VIEW",
                         "-d",
-                        &format!("file://{}", remote),
+                        &shell_quote(&format!("file://{}", remote)),
                         "-t",
-                        "video/*",
+                        "'video/*'",
                     ])
                     .spawn();
             }
@@ -603,15 +612,24 @@ pub const fn webcam_direct_supported() -> bool {
     cfg!(target_os = "linux")
 }
 
+/// Type `text` on the device.
+///
+/// `adb shell` joins its arguments and hands the result to the *device's* shell, so
+/// any metacharacter left unquoted runs as a command there — `;`, `` ` ``, `$(…)`,
+/// `|` and `&` all did, since the previous escaping covered neither them nor the
+/// backslash that would have escaped them. Wrap the payload in POSIX single quotes
+/// instead: they are the one quoting form a shell does not interpret at all. Spaces
+/// keep going through `input`'s own `%s` placeholder, which it expands itself, well
+/// after the shell is done.
 pub fn send_text_to_device(id: &str, text: &str) {
-    let escaped = text
-        .replace(' ', "%s")
-        .replace('&', "\\&")
-        .replace('<', "\\<")
-        .replace('>', "\\>")
-        .replace('\'', "\\'")
-        .replace('"', "\\\"");
-    adb_fire(id, &["shell", "input", "text", &escaped]);
+    let payload = shell_quote(&text.replace(' ', "%s"));
+    adb_fire(id, &["shell", "input", "text", &payload]);
+}
+
+/// Quote `s` for the device shell. Single quotes suppress every expansion; an
+/// embedded quote has to leave and re-enter them, which is what `'\''` does.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 pub fn get_battery_info(id: &str) -> Option<(u8, String)> {
@@ -717,7 +735,8 @@ fn looks_like_mode(tok: &str) -> bool {
 /// Falls back to a name-only reading per line if a row doesn't match the long format,
 /// so it degrades gracefully across toybox/busybox variants.
 pub fn list_remote_dir(id: &str, remote: &str) -> Vec<(String, bool, u64)> {
-    let out = adb_device(id, &["shell", "ls", "-lp", remote]).unwrap_or_default();
+    // A device path is untrusted input — it can hold spaces and shell metacharacters.
+    let out = adb_device(id, &["shell", "ls", "-lp", &shell_quote(remote)]).unwrap_or_default();
     parse_ls_output(&out)
 }
 
@@ -859,8 +878,13 @@ pub fn take_screenshot(id: &str) -> Option<Vec<u8>> {
         .args(["-s", id, "shell", "screencap", "-p", remote_path])
         .output();
 
-    // Pull to temp file
-    let local_tmp = std::env::temp_dir().join("phone_tv_screenshot.png");
+    // Staging path for the pull. Not /tmp: a fixed name in a world-writable
+    // directory lets any local account pre-plant a symlink there and have `adb pull`
+    // follow it, overwriting a file of ours — and it would leave the screenshot
+    // readable to everyone besides. The config dir is owner-only (0700).
+    let cache = crate::config::config_dir().join("cache");
+    let _ = std::fs::create_dir_all(&cache);
+    let local_tmp = cache.join("screenshot.png");
     let local_str = local_tmp.to_string_lossy().to_string();
     let pull_ok = Command::new("adb")
         .args(["-s", id, "pull", remote_path, &local_str])
@@ -882,7 +906,26 @@ pub fn take_screenshot(id: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_private_lan_ip, parse_device_lan_ip, parse_ls_output};
+    use super::{is_private_lan_ip, parse_device_lan_ip, parse_ls_output, shell_quote};
+
+    #[test]
+    fn shell_quote_neutralises_metacharacters() {
+        // Everything the device shell would otherwise act on stays literal.
+        assert_eq!(shell_quote("plain"), "'plain'");
+        assert_eq!(shell_quote("a; reboot"), "'a; reboot'");
+        assert_eq!(shell_quote("$(id)`id`"), "'$(id)`id`'");
+        assert_eq!(shell_quote("a|b&c<d>e*"), "'a|b&c<d>e*'");
+        // A backslash is data, not an escape: it must not be able to end the quote.
+        assert_eq!(shell_quote(r"back\slash"), r"'back\slash'");
+    }
+
+    #[test]
+    fn shell_quote_escapes_embedded_quotes() {
+        // The payload leaves the quotes, contributes a literal ', and re-enters.
+        assert_eq!(shell_quote("it's"), r#"'it'\''s'"#);
+        // A closing quote followed by a command is the injection this blocks.
+        assert_eq!(shell_quote("x'; id #"), r#"'x'\''; id #'"#);
+    }
 
     #[test]
     fn extracts_wlan_ip_from_ip_addr_output() {

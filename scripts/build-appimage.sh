@@ -46,12 +46,34 @@ exec "$HERE/usr/bin/phone-tv" "$@"
 EOF
 chmod +x "$APPDIR/AppRun"
 
-# Get appimagetool if missing
-TOOL="$OUT_DIR/appimagetool.AppImage"
+# Get appimagetool if missing.
+#
+# Pinned to a tagged release with a recorded digest, not to `continuous`: this tool
+# runs in the release workflow and its output is what users download, so an
+# unverified binary fetched from a moving tag would put whoever can influence that
+# tag inside our supply chain. Bump both the version and the digest together.
+APPIMAGETOOL_VERSION="1.9.1"
+case "$ARCH" in
+    x86_64)  APPIMAGETOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0" ;;
+    aarch64) APPIMAGETOOL_SHA256="f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158" ;;
+    armhf)   APPIMAGETOOL_SHA256="42b61cba5495d8aaf418a5c9a015a49b85ad92efabcbd3c341f1540440e4e23d" ;;
+    i686)    APPIMAGETOOL_SHA256="7ad9ff47c203aae0149b18f6df9e3018b2e2f470ea644a0413e3ded39e9e3bdb" ;;
+    *) echo "No pinned appimagetool digest for arch '$ARCH'" >&2; exit 1 ;;
+esac
+
+TOOL="$OUT_DIR/appimagetool-${APPIMAGETOOL_VERSION}-${ARCH}.AppImage"
 if [ ! -x "$TOOL" ]; then
-    URL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${ARCH}.AppImage"
+    URL="https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-${ARCH}.AppImage"
     echo "Downloading $URL"
-    curl -fsSL "$URL" -o "$TOOL"
+    curl -fsSL "$URL" -o "$TOOL.part"
+    if ! echo "${APPIMAGETOOL_SHA256}  $TOOL.part" | sha256sum -c - >/dev/null 2>&1; then
+        echo "appimagetool checksum mismatch — refusing to run it" >&2
+        echo "  expected: $APPIMAGETOOL_SHA256" >&2
+        echo "  got:      $(sha256sum < "$TOOL.part" | cut -d' ' -f1)" >&2
+        rm -f "$TOOL.part"
+        exit 1
+    fi
+    mv "$TOOL.part" "$TOOL"
     chmod +x "$TOOL"
 fi
 

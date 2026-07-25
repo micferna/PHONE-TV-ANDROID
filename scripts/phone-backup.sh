@@ -2,7 +2,29 @@
 set -euo pipefail
 
 # ── Config ──────────────────────────────────────────────────────────
-DEVICE_SERIAL="ZY22JVMJWL"
+# The device to back up: PHONE_SERIAL, else whichever one is plugged in. Not a
+# hardcoded serial — that publishes a stable identifier for a personal handset and
+# makes the script useless on any other machine. udev fires this on plug-in, so the
+# device often needs a moment to enumerate: poll rather than give up at once.
+detect_serial() {
+    local waited=0 found
+    while [ "$waited" -lt 20 ]; do
+        found=$(adb devices 2>/dev/null | awk 'NR>1 && $2=="device" {print $1}' | head -1)
+        if [ -n "$found" ]; then
+            printf '%s' "$found"
+            return 0
+        fi
+        sleep 1
+        waited=$(( waited + 1 ))
+    done
+    return 1
+}
+
+DEVICE_SERIAL="${PHONE_SERIAL:-$(detect_serial || true)}"
+if [ -z "$DEVICE_SERIAL" ]; then
+    echo "Aucun appareil ADB détecté. Branchez-le ou fixez PHONE_SERIAL=<serial>." >&2
+    exit 1
+fi
 BACKUP_ROOT="$HOME/Backups/Phone"
 LATEST_DIR="$BACKUP_ROOT/latest"
 EXPORTS_DIR="$BACKUP_ROOT/exports"
@@ -78,7 +100,12 @@ wait_for_device() {
             return 0
         fi
         sleep 1
-        (( waited++ ))
+        # Not (( waited++ )): a bare arithmetic command exits non-zero when the
+        # expression evaluates to 0, which post-increment does on the very first
+        # pass — and `set -e` then killed the whole backup, silently, before any
+        # log line. Exactly the case udev triggers: a phone just plugged in is
+        # never ready on the first check.
+        waited=$(( waited + 1 ))
     done
     log "ERROR: device $DEVICE_SERIAL not ready after ${ADB_WAIT_SECONDS}s"
     exit 1
@@ -214,7 +241,7 @@ for line in sys.stdin:
 
 json.dump(msgs, open('$json_file', 'w'), ensure_ascii=False, indent=1)
 print(len(msgs))
-" 2>/dev/null
+" 2>/dev/null || { log "  ERROR: requête ou parsing SMS en échec"; errors=$(( errors + 1 )); }
     local count
     count=$(jq length "$json_file" 2>/dev/null || echo 0)
 
@@ -251,7 +278,7 @@ for line in sys.stdin:
 
 json.dump(sorted(apps, key=lambda a: a['package']), open('$json_file', 'w'), ensure_ascii=False, indent=1)
 print(len(apps))
-" 2>/dev/null
+" 2>/dev/null || { log "  ERROR: liste des apps en échec"; errors=$(( errors + 1 )); }
 
     local count
     count=$(jq length "$json_file" 2>/dev/null || echo 0)
@@ -314,7 +341,7 @@ info = {
 
 json.dump(info, open('$json_file', 'w'), ensure_ascii=False, indent=2)
 print('OK')
-" 2>/dev/null
+" 2>/dev/null || { log "  ERROR: infos device en échec"; errors=$(( errors + 1 )); }
 
     log "  Device info exported"
 }
@@ -496,6 +523,27 @@ maybe_archive() {
 }
 
 # ── Main ────────────────────────────────────────────────────────────
+
+# Run one backup step without letting it take the others down with it.
+#
+# Every export ends in an `adb … | python3 …` or `… | jq …` pipeline, and under
+# `set -euo pipefail` a non-zero exit anywhere in one of those aborts the whole
+# script. A single unreadable content provider — a locked device denying
+# content://sms, say — therefore cost the contacts, the call log, the app list,
+# the device info *and* the weekly archive, none of which had any reason to fail.
+#
+# Calling the step as a condition also suspends `set -e` for its whole body, so a
+# step that trips halfway still runs to its end on a best-effort basis instead of
+# stopping dead.
+run_step() {
+    local label="$1"
+    shift
+    if ! "$@"; then
+        log "  ERROR: étape '$label' en échec — sauvegarde poursuivie"
+        errors=$(( errors + 1 ))
+    fi
+}
+
 main() {
     init_dirs
     acquire_lock
@@ -504,13 +552,13 @@ main() {
 
     log "START: backup for $DEVICE_SERIAL"
 
-    sync_files
-    export_sms
-    export_contacts
-    export_call_log
-    export_apps
-    export_device_info
-    maybe_archive
+    run_step "fichiers"     sync_files
+    run_step "SMS"          export_sms
+    run_step "contacts"     export_contacts
+    run_step "journal"      export_call_log
+    run_step "apps"         export_apps
+    run_step "infos device" export_device_info
+    run_step "archive"      maybe_archive
 
     log "DONE: $TODAY — files_copied=$files_copied errors=$errors"
 }
