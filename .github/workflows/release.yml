@@ -47,7 +47,7 @@ jobs:
           name: linux-artifacts
           path: |
             target/debian/*.deb
-            dist/*.AppImage
+            dist/phone-tv-*.AppImage
 
   build-windows:
     name: Build Windows artifact (.zip)
@@ -93,6 +93,9 @@ jobs:
       - name: Publish
         uses: softprops/action-gh-release@v3
         with:
+          # Without this the release body is empty: the action does not fall back
+          # to the annotated tag message, as v5.0.0 shipped blank and proved.
+          generate_release_notes: true
           files: |
             artifacts/linux-artifacts/**/*.deb
             artifacts/linux-artifacts/**/*.AppImage

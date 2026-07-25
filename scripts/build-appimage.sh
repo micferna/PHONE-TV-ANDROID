@@ -61,7 +61,11 @@ case "$ARCH" in
     *) echo "No pinned appimagetool digest for arch '$ARCH'" >&2; exit 1 ;;
 esac
 
-TOOL="$OUT_DIR/appimagetool-${APPIMAGETOOL_VERSION}-${ARCH}.AppImage"
+# Not in $OUT_DIR: the release workflow uploads dist/*.AppImage, and that glob
+# happily swept the build tool into the published release next to the application.
+TOOL_DIR="$OUT_DIR/.tools"
+mkdir -p "$TOOL_DIR"
+TOOL="$TOOL_DIR/appimagetool-${APPIMAGETOOL_VERSION}-${ARCH}.AppImage"
 if [ ! -x "$TOOL" ]; then
     URL="https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-${ARCH}.AppImage"
     echo "Downloading $URL"
