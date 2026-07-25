@@ -147,7 +147,25 @@ scrcpy ──> Phone-Cam-SRC ──> ffmpeg ──┬──> Phone-Cam-1   (Disc
 
 Ce « fan-out » démarre et s'arrête avec la webcam. Il n'y a pas de ré-encodage, les
 images sont copiées telles quelles. **Ne choisissez jamais `Phone-Cam-SRC` dans une
-application** : elle confisquerait le jeton de la source. Le nombre de sorties fixe le
+application** : elle confisquerait le jeton de la source.
+
+### Pourquoi `exclusive_caps=1,0,0,0,0`
+
+La source est à `1`, les quatre sorties à `0`, et l'asymétrie est voulue.
+
+Avec `exclusive_caps=1`, un périphérique loopback n'annonce « Video Capture » que
+pendant qu'un writer le tient ouvert. C'est exactement le signal dont l'application a
+besoin **sur la source** pour savoir si scrcpy a démarré.
+
+Sur les **sorties**, la même option est un piège : elles restent invisibles tant que
+le fan-out ne les a pas ouvertes, or WirePlumber n'énumère les caméras qu'à son
+démarrage et ne repasse jamais quand un writer apparaît ensuite. Résultat, Firefox ne
+voyait aucune caméra, et le seul recours était de redémarrer WirePlumber — donc de
+réinitialiser le routage audio de toutes vos applications. À `0`, les sorties sont
+annoncées en permanence, PipeWire les publie au démarrage, et le problème disparaît.
+
+Contrepartie assumée : `Phone-Cam-1` à `Phone-Cam-4` apparaissent dans les menus
+caméra même téléphone éteint, où elles donnent une image noire. Le nombre de sorties fixe le
 nombre d'applications simultanées ; pour en ajouter, étendez `video_nr` dans
 `/etc/modprobe.d/v4l2loopback.conf` *et* `FANOUT_SINKS` dans `src/adb.rs`.
 

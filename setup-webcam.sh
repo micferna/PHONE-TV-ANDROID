@@ -7,6 +7,21 @@ echo "=== Configuration Webcam Virtuelle Phone-Cam ==="
 # application peut lire un /dev/videoN à la fois. On crée donc une source
 # (Phone-Cam-SRC, alimentée par scrcpy) et plusieurs sorties, une par application,
 # que l'app recopie depuis la source. Voir scripts/webcam-fanout.sh.
+#
+# exclusive_caps=1,0,0,0,0 — la source à 1, les sorties à 0. Ce n'est pas un détail :
+#
+#   • La SOURCE reste à 1 parce qu'un device n'annonce alors « Video Capture » que
+#     pendant qu'un writer le tient ouvert. C'est ce basculement que l'application
+#     lit pour savoir si scrcpy a démarré (webcam_sink_has_writer dans src/adb.rs).
+#
+#   • Les SORTIES passent à 0 pour être annoncées en permanence. À 1, elles restent
+#     invisibles tant qu'aucun writer ne les a ouvertes — et WirePlumber n'énumère
+#     qu'au démarrage, sans jamais repasser quand un writer arrive : Firefox ne
+#     voyait donc aucune caméra, et le seul recours était de redémarrer WirePlumber,
+#     c'est-à-dire de réinitialiser le routage audio de toutes les applications.
+#
+# Contrepartie assumée : Phone-Cam-1 à 4 apparaissent dans les menus caméra même
+# téléphone éteint, et donnent alors une image noire.
 if lsmod | grep -q v4l2loopback; then
     echo "[OK] v4l2loopback déjà chargé"
 else
@@ -14,7 +29,7 @@ else
     if sudo modprobe v4l2loopback \
         video_nr=10,12,13,14,15 \
         card_label="Phone-Cam-SRC,Phone-Cam-1,Phone-Cam-2,Phone-Cam-3,Phone-Cam-4" \
-        exclusive_caps=1,1,1,1,1; then
+        exclusive_caps=1,0,0,0,0; then
         echo "[OK] v4l2loopback chargé"
     else
         echo "[ERREUR] Impossible de charger v4l2loopback"
@@ -82,4 +97,4 @@ echo ""
 echo "Pour charger automatiquement au démarrage, créez /etc/modprobe.d/v4l2loopback.conf:"
 echo "  options v4l2loopback video_nr=10,12,13,14,15 \\"
 echo "    card_label=Phone-Cam-SRC,Phone-Cam-1,Phone-Cam-2,Phone-Cam-3,Phone-Cam-4 \\"
-echo "    exclusive_caps=1,1,1,1,1"
+echo "    exclusive_caps=1,0,0,0,0"
