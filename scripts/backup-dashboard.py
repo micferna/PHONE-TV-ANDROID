@@ -1886,8 +1886,29 @@ fetch('/api/config').then(r=>r.json()).then(cfg=>{
 </html>"""
 
 
+def _detect_serial():
+    """The device to drive: PHONE_SERIAL, else the only one plugged in.
+
+    Hardcoding a serial in a public repository publishes a stable identifier for
+    someone's personal handset, and makes the tool useless to anyone else.
+    """
+    env = os.environ.get("PHONE_SERIAL", "").strip()
+    if env:
+        return env
+    try:
+        out = subprocess.run(["adb", "devices"], capture_output=True, text=True,
+                             timeout=5).stdout
+    except Exception:
+        return ""
+    ready = [ln.split()[0] for ln in out.splitlines()[1:]
+             if ln.strip() and ln.split()[-1] == "device"]
+    # Exactly one: unambiguous. Several: refuse to guess which phone to drive.
+    return ready[0] if len(ready) == 1 else ""
+
+
+DEVICE_SERIAL = _detect_serial()
+
 # ── OSINT: French phone number analysis ─────────────────────────────
-DEVICE_SERIAL = "ZY22JVMJWL"
 
 # French mobile operator ranges (prefix after +33 or 0)
 # Source: ARCEP numbering plan

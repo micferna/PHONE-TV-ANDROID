@@ -2,7 +2,29 @@
 set -euo pipefail
 
 # ── Config ──────────────────────────────────────────────────────────
-DEVICE_SERIAL="ZY22JVMJWL"
+# The device to back up: PHONE_SERIAL, else whichever one is plugged in. Not a
+# hardcoded serial — that publishes a stable identifier for a personal handset and
+# makes the script useless on any other machine. udev fires this on plug-in, so the
+# device often needs a moment to enumerate: poll rather than give up at once.
+detect_serial() {
+    local waited=0 found
+    while [ "$waited" -lt 20 ]; do
+        found=$(adb devices 2>/dev/null | awk 'NR>1 && $2=="device" {print $1}' | head -1)
+        if [ -n "$found" ]; then
+            printf '%s' "$found"
+            return 0
+        fi
+        sleep 1
+        waited=$(( waited + 1 ))
+    done
+    return 1
+}
+
+DEVICE_SERIAL="${PHONE_SERIAL:-$(detect_serial || true)}"
+if [ -z "$DEVICE_SERIAL" ]; then
+    echo "Aucun appareil ADB détecté. Branchez-le ou fixez PHONE_SERIAL=<serial>." >&2
+    exit 1
+fi
 BACKUP_ROOT="$HOME/Backups/Phone"
 LATEST_DIR="$BACKUP_ROOT/latest"
 EXPORTS_DIR="$BACKUP_ROOT/exports"
@@ -78,7 +100,12 @@ wait_for_device() {
             return 0
         fi
         sleep 1
-        (( waited++ ))
+        # Not (( waited++ )): a bare arithmetic command exits non-zero when the
+        # expression evaluates to 0, which post-increment does on the very first
+        # pass — and `set -e` then killed the whole backup, silently, before any
+        # log line. Exactly the case udev triggers: a phone just plugged in is
+        # never ready on the first check.
+        waited=$(( waited + 1 ))
     done
     log "ERROR: device $DEVICE_SERIAL not ready after ${ADB_WAIT_SECONDS}s"
     exit 1
