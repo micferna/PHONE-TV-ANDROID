@@ -1,5 +1,7 @@
 use std::path::Path;
 use std::process::{Child, Command};
+#[cfg(target_os = "linux")]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::types::{Device, DeviceType, TransferState};
@@ -24,6 +26,47 @@ pub fn adb_fire(id: &str, args: &[&str]) {
     let _ = Command::new("adb").args(&full_args).spawn();
 }
 
+/// Read several device properties in a single round trip.
+///
+/// Two costs stack up here, and neither is the work itself: an `adb shell` is ~30 ms
+/// of round trip, and every `getprop` is another ~20 ms of process spawn on the phone.
+/// Dumping the whole property table pays each once. Measured on a moto g14 over USB:
+///
+///   3 separate `adb shell getprop <p>`      90 ms
+///   3 `getprop` inside one `adb shell`      67 ms
+///   1 `adb shell getprop` (whole table)     36 ms
+///
+/// The 40 KB that comes back parses in microseconds, so the dump wins outright.
+/// Always returns exactly `props.len()` entries; a property the device does not
+/// define comes back empty, which is what the callers want.
+fn get_props(id: &str, props: &[&str]) -> Vec<String> {
+    let dump = adb_device(id, &["shell", "getprop"]).unwrap_or_default();
+    let table: std::collections::HashMap<&str, &str> =
+        dump.lines().filter_map(parse_getprop_line).collect();
+    props
+        .iter()
+        .map(|p| table.get(p).copied().unwrap_or_default().to_string())
+        .collect()
+}
+
+/// Split one line of a bare `getprop` dump, whose format is `[key]: [value]`.
+/// Returns `None` for anything that doesn't match, so junk lines drop out.
+fn parse_getprop_line(line: &str) -> Option<(&str, &str)> {
+    let (key, value) = line.split_once("]: [")?;
+    Some((key.strip_prefix('[')?, value.strip_suffix(']')?))
+}
+
+/// True when the identifying strings point at a TV rather than a handset.
+fn looks_like_tv(name: &str, features: &str, product: &str) -> bool {
+    let name = name.to_lowercase();
+    features.to_lowercase().contains("tv")
+        || product.to_lowercase().contains("tv")
+        || name.contains("tv")
+        || name.contains("shield")
+        || name.contains("chromecast")
+        || name.contains("mibox")
+}
+
 pub fn get_all_devices() -> Vec<Device> {
     let mut devices = Vec::new();
 
@@ -38,40 +81,35 @@ pub fn get_all_devices() -> Vec<Device> {
                 let id = parts[0].to_string();
                 let status = parts[1].to_string();
 
-                let name = if status == "device" {
-                    adb_device(&id, &["shell", "getprop", "ro.product.model"])
-                        .map(|s| s.trim().to_string())
-                        .unwrap_or_else(|| id.clone())
-                } else {
-                    parts
-                        .iter()
-                        .find(|p| p.starts_with("model:"))
-                        .map(|p| p.replace("model:", ""))
-                        .unwrap_or_else(|| id.clone())
-                };
-
-                let device_type = if status == "device" {
-                    let features =
-                        adb_device(&id, &["shell", "getprop", "ro.build.characteristics"])
-                            .unwrap_or_default()
-                            .to_lowercase();
-                    let product = adb_device(&id, &["shell", "getprop", "ro.product.name"])
-                        .unwrap_or_default()
-                        .to_lowercase();
-
-                    if features.contains("tv")
-                        || product.contains("tv")
-                        || name.to_lowercase().contains("tv")
-                        || name.to_lowercase().contains("shield")
-                        || name.to_lowercase().contains("chromecast")
-                        || name.to_lowercase().contains("mibox")
-                    {
+                let (name, device_type) = if status == "device" {
+                    let props = get_props(
+                        &id,
+                        &[
+                            "ro.product.model",
+                            "ro.build.characteristics",
+                            "ro.product.name",
+                        ],
+                    );
+                    let name = if props[0].is_empty() {
+                        id.clone()
+                    } else {
+                        props[0].clone()
+                    };
+                    let kind = if looks_like_tv(&name, &props[1], &props[2]) {
                         DeviceType::Tv
                     } else {
                         DeviceType::Phone
-                    }
+                    };
+                    (name, kind)
                 } else {
-                    DeviceType::Unknown
+                    // Unauthorized / offline: no shell to ask, so fall back to the
+                    // model `adb devices -l` already printed.
+                    let name = parts
+                        .iter()
+                        .find(|p| p.starts_with("model:"))
+                        .map(|p| p.replace("model:", ""))
+                        .unwrap_or_else(|| id.clone());
+                    (name, DeviceType::Unknown)
                 };
 
                 devices.push(Device {
@@ -278,16 +316,18 @@ pub fn connect_adb_wifi(addr: &str) -> bool {
 /// it over WiFi, so a stream bound to the returned id keeps running after the USB
 /// cable is unplugged.
 ///
-/// Returns the wireless device id (`ip:5555`) on success. If `id` is already a
-/// network transport (contains ':') it is returned unchanged. Returns `None` when the
-/// phone has no reachable WiFi IP or the wireless connection can't be established —
-/// callers should then fall back to the original (USB) transport.
-pub fn enable_wifi_adb(id: &str) -> Option<String> {
+/// Returns the wireless device id (`ip:5555`) and whether *this call* is what opened
+/// the port, so the caller can close what it opened and leave alone what it found
+/// already running. If `id` is already a network transport (contains ':') it is
+/// returned unchanged. Returns `None` when the phone has no reachable WiFi IP or the
+/// wireless connection can't be established — callers should then fall back to the
+/// original (USB) transport.
+pub fn enable_wifi_adb(id: &str) -> Option<(String, bool)> {
     use std::time::Duration;
 
     // Already a network transport (ip:port): nothing to switch.
     if id.contains(':') {
-        return Some(id.to_string());
+        return Some((id.to_string(), false));
     }
 
     // Read the phone's WiFi IP while the USB transport is still up.
@@ -298,7 +338,7 @@ pub fn enable_wifi_adb(id: &str) -> Option<String> {
     // A short, bounded TCP probe — `adb connect` itself can hang forever on an
     // unreachable host, so we never call it without first proving the port is open.
     if port_reachable(&addr, Duration::from_millis(600)) {
-        return connect_adb_wifi(&addr).then(|| addr.clone());
+        return connect_adb_wifi(&addr).then(|| (addr.clone(), false));
     }
 
     // Don't disturb the working USB transport if the phone's WiFi IP can't possibly
@@ -316,7 +356,21 @@ pub fn enable_wifi_adb(id: &str) -> Option<String> {
     if !wait_port_reachable(&addr, Duration::from_secs(3)) {
         return None; // caller falls back to the USB transport
     }
-    connect_adb_wifi(&addr).then(|| addr.clone())
+    connect_adb_wifi(&addr).then(|| (addr.clone(), true))
+}
+
+/// Put adbd back on USB only, closing the TCP/5555 listener this app opened.
+///
+/// `adb tcpip 5555` leaves the phone accepting debug connections from the whole LAN,
+/// and nothing ever took that back: the exposure outlived the stream that needed it,
+/// for as long as the phone stayed up. Only the caller that opened the port should
+/// call this — a port that was already open belongs to whoever opened it.
+///
+/// Sending `usb` over the wireless transport is what tears it down, so the command
+/// necessarily kills its own connection; a non-zero exit here is expected and says
+/// nothing about whether the port closed.
+pub fn disable_wifi_adb(id: &str) {
+    let _ = Command::new("adb").args(["-s", id, "usb"]).output();
 }
 
 /// True if a single TCP connect to `addr` succeeds within `timeout`. Never blocks
@@ -410,12 +464,29 @@ pub fn get_local_ip_prefix() -> Option<String> {
     }
 }
 
+/// How many probes the network scan runs at once.
+///
+/// One OS thread per host meant 254 of them for a /24, nearly all of it spent parked
+/// in `connect`, and 254 simultaneous SYNs is also the kind of burst consumer routers
+/// meter. The trade is latency, since the timeout dominates — measured on a quiet /24
+/// with the 400 ms budget below:
+///
+///   254 threads  0.46 s    32 workers  3.20 s
+///    96 workers  1.20 s    64 workers  1.60 s
+///
+/// 96 keeps under half the threads for well under a second of extra wait, on a scan
+/// that already runs off-thread behind a spinner.
+const SCAN_WORKERS: usize = 96;
+/// Per-host connect budget. Dominates the total: nearly every address on a home LAN
+/// is silent and costs the full timeout.
+const SCAN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(400);
+
 /// Scan the local /24 for hosts listening on TCP/5555 (ADB wireless port).
 /// Pure-Rust parallel scan — works on Linux, macOS and Windows.
 pub fn scan_network_for_adb() -> Vec<String> {
     use std::net::{SocketAddr, TcpStream};
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
 
     let prefix = match get_local_ip_prefix() {
         Some(p) => p,
@@ -423,14 +494,21 @@ pub fn scan_network_for_adb() -> Vec<String> {
     };
 
     let found: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let mut handles = Vec::with_capacity(254);
+    // Shared cursor rather than a fixed slice each: hosts that answer immediately
+    // cost nothing, so a worker that gets a fast range simply moves on to more.
+    let next = Arc::new(AtomicUsize::new(1));
+    let mut handles = Vec::with_capacity(SCAN_WORKERS);
 
-    for i in 1..=254u8 {
-        let ip = format!("{}{}", prefix, i);
-        let found = Arc::clone(&found);
-        handles.push(std::thread::spawn(move || {
+    for _ in 0..SCAN_WORKERS {
+        let (found, next, prefix) = (Arc::clone(&found), Arc::clone(&next), prefix.clone());
+        handles.push(std::thread::spawn(move || loop {
+            let host = next.fetch_add(1, AtomicOrdering::Relaxed);
+            if host > 254 {
+                return;
+            }
+            let ip = format!("{}{}", prefix, host);
             if let Ok(addr) = format!("{}:5555", ip).parse::<SocketAddr>() {
-                if TcpStream::connect_timeout(&addr, Duration::from_millis(400)).is_ok() {
+                if TcpStream::connect_timeout(&addr, SCAN_TIMEOUT).is_ok() {
                     if let Ok(mut v) = found.lock() {
                         v.push(ip);
                     }
@@ -497,6 +575,20 @@ const WEBCAM_ATTEMPTS: u32 = 5;
 const WEBCAM_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
 const WEBCAM_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// The v4l2loopback device scrcpy writes to.
+#[cfg(target_os = "linux")]
+const WEBCAM_SINK: &str = "/dev/video10";
+/// Devices the fan-out copies frames to, one per consuming application: a device
+/// serves exactly one, so this is the cap on how many apps can use the camera at
+/// once. Declared in /etc/modprobe.d/v4l2loopback.conf; missing ones are skipped.
+#[cfg(target_os = "linux")]
+const FANOUT_SINKS: [&str; 4] = [
+    "/dev/video12",
+    "/dev/video13",
+    "/dev/video14",
+    "/dev/video15",
+];
+
 /// Blocks for up to ~30s while retrying; call it off the UI thread.
 pub fn start_webcam_process(
     id: &str,
@@ -517,7 +609,7 @@ pub fn start_webcam_process(
     // Windows/macOS: just show a scrcpy window; the user routes it to a virtual
     // camera via OBS Virtual Camera (or equivalent).
     #[cfg(target_os = "linux")]
-    args.push("--v4l2-sink=/dev/video10".to_string());
+    args.push(format!("--v4l2-sink={WEBCAM_SINK}"));
 
     if with_mic {
         args.push("--audio-source=mic".to_string());
@@ -535,7 +627,12 @@ pub fn start_webcam_process(
         match child.try_wait() {
             Ok(None) => {
                 #[cfg(target_os = "linux")]
-                ensure_pipewire_camera_node();
+                {
+                    // Before the PipeWire check: the nodes it waits for are the
+                    // fan-out sinks, which only advertise capture once ffmpeg writes.
+                    start_webcam_fanout();
+                    ensure_pipewire_camera_node();
+                }
                 return Some(child);
             }
             Ok(Some(_)) => {} // already reaped
@@ -548,23 +645,316 @@ pub fn start_webcam_process(
     None
 }
 
-/// With v4l2loopback `exclusive_caps=1`, /dev/video10 only advertises capture
-/// capabilities while scrcpy is writing to it. If WirePlumber probed the device
-/// before the stream existed (e.g. right after boot), it never creates the
-/// PipeWire source node, and browsers that enumerate cameras through PipeWire
-/// (Firefox) don't see the camera even though direct-V4L2 apps (Discord) do.
-/// Once the stream is up, restart WirePlumber so it re-probes the device.
+/// v4l2loopback hands out a single capture token per device (`V4L2L_TOKEN_CAPTURE`
+/// is one bit, granted once), so exactly one application can stream from a given
+/// device; every other reader's S_FMT/REQBUFS fails with -EBUSY. `max_openers` does
+/// not help: it only bounds open(), which is all an app needs to *enumerate* the
+/// camera. So Firefox and Discord can never share /dev/video10 directly.
+///
+/// Read the sink once and copy the frames out to a dedicated device per application:
+///
+///   scrcpy -> /dev/video10 -> ffmpeg -+-> /dev/video12
+///                                     `-> /dev/video13
+///
+/// Each application then takes the token of *its own* device. Frames are copied, not
+/// re-encoded. Mirrors scripts/webcam-fanout.sh, which does the same thing by hand.
+#[cfg(target_os = "linux")]
+static FANOUT: Mutex<Option<Child>> = Mutex::new(None);
+/// Bumped on every start/stop so a fan-out that finishes spawning after its webcam
+/// was already stopped kills itself instead of leaking an orphan ffmpeg.
+#[cfg(target_os = "linux")]
+static FANOUT_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// scrcpy may not have opened the sink yet when ffmpeg starts, and a later
+/// face-unlock eviction kills the stream mid-flight: the fan-out thread waits for
+/// the source, supervises ffmpeg, and relaunches it for as long as its generation
+/// is the current one, instead of burning a fixed number of attempts.
+#[cfg(target_os = "linux")]
+const FANOUT_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+#[cfg(target_os = "linux")]
+const FANOUT_SETTLE: std::time::Duration = std::time::Duration::from_millis(1500);
+#[cfg(target_os = "linux")]
+const FANOUT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// True while a writer holds the scrcpy sink open. With `exclusive_caps=1` a
+/// loopback device advertises "Video Capture" from the moment a writer opens it and
+/// sets a format, and falls back to "Video Output" only once that writer closes.
+///
+/// So this answers "has scrcpy opened the sink" — the same check
+/// scripts/webcam-fanout.sh waits on before starting ffmpeg — and *not* "are frames
+/// flowing": a scrcpy frozen by a face-unlock eviction keeps the device advertising
+/// capture (verified: SIGSTOP-ing a writer leaves the capability set untouched, and
+/// v4l2loopback's sysfs `state`/`buffers`/`format` are equally static). Frame flow is
+/// tracked from the fan-out's own counter instead — see [`webcam_stream_stalled`].
+#[cfg(target_os = "linux")]
+fn webcam_sink_has_writer() -> bool {
+    match Command::new("v4l2-ctl")
+        .args(["-d", WEBCAM_SINK, "-D"])
+        .output()
+    {
+        Ok(o) => String::from_utf8_lossy(&o.stdout).contains("Video Capture"),
+        // Pas de v4l2-ctl : impossible de sonder, ne pas bloquer le fan-out.
+        Err(_) => true,
+    }
+}
+
+/// Frame counter of the running fan-out ffmpeg, fed by its `-progress` stream.
+/// `None` whenever no fan-out is copying frames, so a missing fan-out never reads
+/// as a stall.
+#[cfg(target_os = "linux")]
+struct FanoutHealth {
+    /// Frames copied so far, as last reported by ffmpeg.
+    frames: u64,
+    /// When `frames` last moved — or when the fan-out started.
+    last_advance: std::time::Instant,
+}
+
+#[cfg(target_os = "linux")]
+static FANOUT_HEALTH: Mutex<Option<FanoutHealth>> = Mutex::new(None);
+
+/// A fan-out that copies nothing for this long is reading a dead source, not a slow
+/// one. Sized above the ~9s a face-unlock HAL holds the sensor, so a stream that is
+/// merely about to recover on its own is not cut short.
+#[cfg(target_os = "linux")]
+const FANOUT_STALL_AFTER: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// True when the fan-out is up but has copied no new frame for
+/// [`FANOUT_STALL_AFTER`]: scrcpy still holds the sink yet has gone silent, which is
+/// the state a face-unlock eviction leaves behind. False when no fan-out runs —
+/// without a frame counter there is nothing to conclude, and guessing would restart
+/// healthy streams.
+#[cfg(target_os = "linux")]
+pub fn webcam_stream_stalled() -> bool {
+    FANOUT_HEALTH.lock().is_ok_and(|health| {
+        health
+            .as_ref()
+            .is_some_and(|h| h.last_advance.elapsed() >= FANOUT_STALL_AFTER)
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn webcam_stream_stalled() -> bool {
+    false
+}
+
+/// Follow ffmpeg's `-progress` stream and keep [`FANOUT_HEALTH`] current. ffmpeg
+/// blocks once an unread pipe fills, so this must run for as long as the child does;
+/// EOF (the child exited) simply ends the thread, its lifetime being the supervisor's
+/// business.
+#[cfg(target_os = "linux")]
+fn track_fanout_progress(stdout: std::process::ChildStdout, generation: u64) {
+    use std::io::BufRead;
+
+    for line in std::io::BufReader::new(stdout)
+        .lines()
+        .map_while(Result::ok)
+    {
+        if FANOUT_GEN.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let Some(frames) = line
+            .strip_prefix("frame=")
+            .and_then(|n| n.trim().parse::<u64>().ok())
+        else {
+            continue;
+        };
+        let Ok(mut health) = FANOUT_HEALTH.lock() else {
+            return;
+        };
+        if let Some(h) = health.as_mut() {
+            if frames > h.frames {
+                h.frames = frames;
+                h.last_advance = std::time::Instant::now();
+            }
+        }
+    }
+}
+
+/// Start (or clear) the frame counter the stall probe reads.
+#[cfg(target_os = "linux")]
+fn set_fanout_health(active: bool) {
+    if let Ok(mut health) = FANOUT_HEALTH.lock() {
+        *health = active.then(|| FanoutHealth {
+            frames: 0,
+            last_advance: std::time::Instant::now(),
+        });
+    }
+}
+
+/// The devices applications are meant to consume. Falls back to the raw scrcpy sink
+/// when no fan-out device exists, which is the pre-fan-out single-consumer behaviour.
+#[cfg(target_os = "linux")]
+fn consumer_devices() -> Vec<&'static str> {
+    let sinks: Vec<&'static str> = FANOUT_SINKS
+        .iter()
+        .copied()
+        .filter(|s| Path::new(s).exists())
+        .collect();
+    if sinks.is_empty() {
+        vec![WEBCAM_SINK]
+    } else {
+        sinks
+    }
+}
+
+/// Non-blocking: the fan-out comes up on its own thread.
+#[cfg(target_os = "linux")]
+fn start_webcam_fanout() {
+    stop_webcam_fanout();
+    let sinks = consumer_devices();
+    if sinks == [WEBCAM_SINK] {
+        return; // rien à dupliquer
+    }
+    let generation = FANOUT_GEN.load(Ordering::SeqCst);
+
+    std::thread::spawn(move || loop {
+        if FANOUT_GEN.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        // Ne lancer ffmpeg que quand scrcpy pousse réellement des images : après
+        // une éviction face-unlock la source peut rester muette bien plus
+        // longtemps que quelques tentatives, on l'attend au lieu d'abandonner.
+        if !webcam_sink_has_writer() {
+            std::thread::sleep(FANOUT_POLL);
+            continue;
+        }
+
+        let mut cmd = Command::new("ffmpeg");
+        // `-progress pipe:1` turns stdout into the frame counter the stall probe
+        // reads; `-nostats` keeps the human-readable status line off it.
+        cmd.args([
+            "-loglevel",
+            "error",
+            "-nostats",
+            "-progress",
+            "pipe:1",
+            "-f",
+            "v4l2",
+            "-i",
+            WEBCAM_SINK,
+        ]);
+        for sink in &sinks {
+            cmd.args(["-map", "0:v", "-f", "v4l2", "-pix_fmt", "yuv420p", sink]);
+        }
+        // No ffmpeg on the box: retrying won't conjure one.
+        let Ok(mut child) = cmd
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        else {
+            return;
+        };
+
+        // Drain `-progress` from the start: an unread pipe eventually blocks ffmpeg.
+        set_fanout_health(true);
+        if let Some(stdout) = child.stdout.take() {
+            std::thread::spawn(move || track_fanout_progress(stdout, generation));
+        }
+
+        std::thread::sleep(FANOUT_SETTLE);
+        if !matches!(child.try_wait(), Ok(None)) {
+            // Mort pendant le settle : la source a pu se taire entre le sondage
+            // et le spawn, on repart l'attendre.
+            kill_child_tree(&mut child);
+            set_fanout_health(false);
+            std::thread::sleep(FANOUT_RETRY_DELAY);
+            continue;
+        }
+
+        {
+            let mut slot = match FANOUT.lock() {
+                Ok(slot) => slot,
+                Err(_) => return,
+            };
+            // Stopped while we were settling: don't resurrect it.
+            if FANOUT_GEN.load(Ordering::SeqCst) != generation {
+                drop(slot);
+                kill_child_tree(&mut child);
+                set_fanout_health(false);
+                return;
+            }
+            *slot = Some(child);
+        }
+
+        // Superviser : si ffmpeg meurt (crash, kill, -EBUSY tardif), on repart
+        // attendre le flux plutôt que de laisser les devices des applications
+        // orphelins. NB : la perte du writer ne suffit pas à le tuer —
+        // v4l2loopback ne remonte pas d'EOF et ffmpeg rediffuse la dernière
+        // image — c'est stop_webcam_fanout(), appelé sur les chemins d'arrêt
+        // de la webcam, qui couvre ce cas via le saut de génération.
+        loop {
+            std::thread::sleep(FANOUT_POLL);
+            let mut slot = match FANOUT.lock() {
+                Ok(slot) => slot,
+                Err(_) => return,
+            };
+            if FANOUT_GEN.load(Ordering::SeqCst) != generation {
+                // stop_webcam_fanout a déjà récupéré et tué l'enfant.
+                return;
+            }
+            match slot.as_mut().map(std::process::Child::try_wait) {
+                Some(Ok(None)) => {}
+                _ => {
+                    *slot = None;
+                    drop(slot);
+                    set_fanout_health(false);
+                    break;
+                }
+            }
+        }
+        std::thread::sleep(FANOUT_RETRY_DELAY);
+    });
+}
+
+#[cfg(target_os = "linux")]
+pub fn stop_webcam_fanout() {
+    if let Ok(mut slot) = FANOUT.lock() {
+        // Under the lock, so an in-flight start_webcam_fanout thread observes the
+        // bump before it can store its child.
+        FANOUT_GEN.fetch_add(1, Ordering::SeqCst);
+        if let Some(mut child) = slot.take() {
+            drop(slot);
+            kill_child_tree(&mut child);
+        }
+    }
+    // Plus de fan-out : plus de compteur d'images, donc plus de verdict « muet ».
+    set_fanout_health(false);
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn stop_webcam_fanout() {}
+
+/// Make sure PipeWire actually publishes the fan-out devices as camera sources.
+///
+/// With `exclusive_caps=1` a loopback device advertises capture only while a writer
+/// holds it open. WirePlumber enumerates through udev at start-up and does not
+/// re-probe when a writer later appears — verified: opening a writer on an idle sink
+/// leaves the PipeWire node count at zero indefinitely. So a device configured that
+/// way and probed while idle stays invisible to everything that goes through
+/// PipeWire (Firefox), even though direct-V4L2 apps (Discord) still find it.
+///
+/// Restarting WirePlumber forces the re-probe, but it is a blunt instrument: it is
+/// the session manager for *audio* too, so every application's routing gets
+/// re-evaluated because a camera was missing.
+///
+/// The way to not need this at all is to give the fan-out sinks `exclusive_caps=0`
+/// (see setup-webcam.sh): they then advertise capture permanently, WirePlumber
+/// publishes them at boot, and the check below simply passes. The source keeps
+/// `exclusive_caps=1`, because [`webcam_sink_has_writer`] reads exactly that flip.
+/// The restart therefore only ever fires on setups predating that change.
 #[cfg(target_os = "linux")]
 fn ensure_pipewire_camera_node() {
     std::thread::spawn(|| {
         for i in 0..10 {
             std::thread::sleep(std::time::Duration::from_secs(2));
-            if pipewire_has_video10_source() {
+            if pipewire_has_camera_sources() {
                 return;
             }
-            // Two attempts: scrcpy may not have opened the sink yet at the
-            // first check, so a restart then would re-probe a still-idle device.
-            if i == 1 || i == 4 {
+            // One restart, and not on the first pass: scrcpy and ffmpeg may not have
+            // opened the sinks yet, and re-probing still-idle devices achieves
+            // nothing but the disruption.
+            if i == 1 {
                 let _ = Command::new("systemctl")
                     .args(["--user", "restart", "wireplumber"])
                     .output();
@@ -573,21 +963,25 @@ fn ensure_pipewire_camera_node() {
     });
 }
 
+/// True once every device an application could pick has a PipeWire source node.
 #[cfg(target_os = "linux")]
-fn pipewire_has_video10_source() -> bool {
+fn pipewire_has_camera_sources() -> bool {
     let Ok(out) = Command::new("pw-dump").output() else {
         return true; // pas de PipeWire → rien à réparer
     };
     let Ok(objects) = serde_json::from_slice::<serde_json::Value>(&out.stdout) else {
         return true;
     };
-    objects.as_array().is_some_and(|objs| {
+    let Some(objs) = objects.as_array() else {
+        return true;
+    };
+    consumer_devices().iter().all(|dev| {
         objs.iter().any(|o| {
             let props = &o["info"]["props"];
             props["media.class"] == "Video/Source"
                 && props["object.path"]
                     .as_str()
-                    .is_some_and(|p| p.contains("/dev/video10"))
+                    .is_some_and(|p| p.contains(dev))
         })
     })
 }
@@ -906,7 +1300,44 @@ pub fn take_screenshot(id: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_private_lan_ip, parse_device_lan_ip, parse_ls_output, shell_quote};
+    use super::{
+        is_private_lan_ip, looks_like_tv, parse_device_lan_ip, parse_getprop_line, parse_ls_output,
+        shell_quote,
+    };
+
+    #[test]
+    fn parses_getprop_dump_lines() {
+        assert_eq!(
+            parse_getprop_line("[ro.product.model]: [moto g14]"),
+            Some(("ro.product.model", "moto g14"))
+        );
+        // Empty value: the property exists but is unset.
+        assert_eq!(
+            parse_getprop_line("[ro.build.characteristics]: []"),
+            Some(("ro.build.characteristics", ""))
+        );
+        // A bracket inside the value must not truncate it.
+        assert_eq!(
+            parse_getprop_line("[some.prop]: [a[b]c]"),
+            Some(("some.prop", "a[b]c"))
+        );
+        // Anything not in `[k]: [v]` form is not a property line.
+        assert_eq!(parse_getprop_line("garbage"), None);
+        assert_eq!(parse_getprop_line(""), None);
+    }
+
+    #[test]
+    fn recognises_tv_devices() {
+        // `ro.build.characteristics` is the reliable signal when it's there.
+        assert!(looks_like_tv("BRAVIA 4K", "tv,nosdcard", "atv"));
+        // Otherwise fall back to well-known names, case-insensitively.
+        assert!(looks_like_tv("NVIDIA SHIELD", "", ""));
+        assert!(looks_like_tv("Chromecast", "", ""));
+        assert!(looks_like_tv("MiBox S", "", ""));
+        // A handset must not be mistaken for one.
+        assert!(!looks_like_tv("moto g14", "default", "cancun_gen"));
+        assert!(!looks_like_tv("Pixel 8", "", ""));
+    }
 
     #[test]
     fn shell_quote_neutralises_metacharacters() {

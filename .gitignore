@@ -1,3 +1,4 @@
 /target
-Cargo.lock
+# Sortie de scripts/build-appimage.sh (AppDir, appimagetool téléchargé, .AppImage)
+/dist
 .claude/worktrees/

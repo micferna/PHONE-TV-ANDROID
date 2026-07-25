@@ -113,6 +113,8 @@ pub fn draw_phone(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                         app.webcam_active = false;
                         app.webcam_device_id = None;
                         app.log("Webcam stoppée");
+                        // The stream is over: stop exposing adbd to the LAN.
+                        app.release_wifi_adb();
                     } else {
                         // Switches to wireless ADB then launches scrcpy, so the cable
                         // can be unplugged without cutting the stream.

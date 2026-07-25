@@ -45,6 +45,9 @@ pub enum BgEvent {
         device_id: String,
         /// True when the stream runs over wireless ADB and survives an USB unplug.
         wifi: bool,
+        /// True when *we* opened TCP/5555 on the phone, so we know to close it again
+        /// on shutdown. A port that was already open belongs to whoever opened it.
+        opened_port: bool,
     },
     StorageInfo {
         device_id: String,
