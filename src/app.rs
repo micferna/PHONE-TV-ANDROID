@@ -1129,6 +1129,23 @@ impl PhoneTvApp {
                 }
             }
         }
+        // Un process scrcpy vivant n'est pas un flux vivant : après une éviction
+        // face-unlock, scrcpy peut garder la caméra du téléphone et le sink v4l2
+        // (format posé) sans plus jamais émettre une image. Ni les capacités du sink
+        // ni sysfs ne bougent dans ce cas — seul le compteur d'images du fan-out
+        // stagne, et c'est donc lui qu'on interroge. Relancer remet le compteur à
+        // zéro, ce qui empêche de rejouer ce chemin avant le prochain vrai gel.
+        if self.webcam_active && self.webcam_child.is_some() && adb::webcam_stream_stalled() {
+            if self.webcam_auto_restarts < MAX_WEBCAM_AUTO_RESTARTS {
+                self.webcam_auto_restarts += 1;
+                self.log("Webcam muette (scrcpy vivant mais plus aucune image) — relance…");
+                self.spawn_webcam(ctx);
+            } else {
+                self.kill_webcam();
+                self.webcam_active = false;
+                self.log("Webcam muette malgré les relances — arrêt");
+            }
+        }
         if let Some(ref mut child) = self.mirror_child {
             if let Ok(Some(_status)) = child.try_wait() {
                 self.mirror_child = None;

@@ -580,14 +580,121 @@ static FANOUT: Mutex<Option<Child>> = Mutex::new(None);
 #[cfg(target_os = "linux")]
 static FANOUT_GEN: AtomicU64 = AtomicU64::new(0);
 
-/// scrcpy may not have opened the sink yet when we first try, and ffmpeg then exits
-/// immediately: retry a few times.
+/// scrcpy may not have opened the sink yet when ffmpeg starts, and a later
+/// face-unlock eviction kills the stream mid-flight: the fan-out thread waits for
+/// the source, supervises ffmpeg, and relaunches it for as long as its generation
+/// is the current one, instead of burning a fixed number of attempts.
 #[cfg(target_os = "linux")]
-const FANOUT_ATTEMPTS: u32 = 5;
+const FANOUT_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 #[cfg(target_os = "linux")]
 const FANOUT_SETTLE: std::time::Duration = std::time::Duration::from_millis(1500);
 #[cfg(target_os = "linux")]
 const FANOUT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// True while a writer holds the scrcpy sink open. With `exclusive_caps=1` a
+/// loopback device advertises "Video Capture" from the moment a writer opens it and
+/// sets a format, and falls back to "Video Output" only once that writer closes.
+///
+/// So this answers "has scrcpy opened the sink" — the same check
+/// scripts/webcam-fanout.sh waits on before starting ffmpeg — and *not* "are frames
+/// flowing": a scrcpy frozen by a face-unlock eviction keeps the device advertising
+/// capture (verified: SIGSTOP-ing a writer leaves the capability set untouched, and
+/// v4l2loopback's sysfs `state`/`buffers`/`format` are equally static). Frame flow is
+/// tracked from the fan-out's own counter instead — see [`webcam_stream_stalled`].
+#[cfg(target_os = "linux")]
+fn webcam_sink_has_writer() -> bool {
+    match Command::new("v4l2-ctl")
+        .args(["-d", WEBCAM_SINK, "-D"])
+        .output()
+    {
+        Ok(o) => String::from_utf8_lossy(&o.stdout).contains("Video Capture"),
+        // Pas de v4l2-ctl : impossible de sonder, ne pas bloquer le fan-out.
+        Err(_) => true,
+    }
+}
+
+/// Frame counter of the running fan-out ffmpeg, fed by its `-progress` stream.
+/// `None` whenever no fan-out is copying frames, so a missing fan-out never reads
+/// as a stall.
+#[cfg(target_os = "linux")]
+struct FanoutHealth {
+    /// Frames copied so far, as last reported by ffmpeg.
+    frames: u64,
+    /// When `frames` last moved — or when the fan-out started.
+    last_advance: std::time::Instant,
+}
+
+#[cfg(target_os = "linux")]
+static FANOUT_HEALTH: Mutex<Option<FanoutHealth>> = Mutex::new(None);
+
+/// A fan-out that copies nothing for this long is reading a dead source, not a slow
+/// one. Sized above the ~9s a face-unlock HAL holds the sensor, so a stream that is
+/// merely about to recover on its own is not cut short.
+#[cfg(target_os = "linux")]
+const FANOUT_STALL_AFTER: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// True when the fan-out is up but has copied no new frame for
+/// [`FANOUT_STALL_AFTER`]: scrcpy still holds the sink yet has gone silent, which is
+/// the state a face-unlock eviction leaves behind. False when no fan-out runs —
+/// without a frame counter there is nothing to conclude, and guessing would restart
+/// healthy streams.
+#[cfg(target_os = "linux")]
+pub fn webcam_stream_stalled() -> bool {
+    FANOUT_HEALTH.lock().is_ok_and(|health| {
+        health
+            .as_ref()
+            .is_some_and(|h| h.last_advance.elapsed() >= FANOUT_STALL_AFTER)
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn webcam_stream_stalled() -> bool {
+    false
+}
+
+/// Follow ffmpeg's `-progress` stream and keep [`FANOUT_HEALTH`] current. ffmpeg
+/// blocks once an unread pipe fills, so this must run for as long as the child does;
+/// EOF (the child exited) simply ends the thread, its lifetime being the supervisor's
+/// business.
+#[cfg(target_os = "linux")]
+fn track_fanout_progress(stdout: std::process::ChildStdout, generation: u64) {
+    use std::io::BufRead;
+
+    for line in std::io::BufReader::new(stdout)
+        .lines()
+        .map_while(Result::ok)
+    {
+        if FANOUT_GEN.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let Some(frames) = line
+            .strip_prefix("frame=")
+            .and_then(|n| n.trim().parse::<u64>().ok())
+        else {
+            continue;
+        };
+        let Ok(mut health) = FANOUT_HEALTH.lock() else {
+            return;
+        };
+        if let Some(h) = health.as_mut() {
+            if frames > h.frames {
+                h.frames = frames;
+                h.last_advance = std::time::Instant::now();
+            }
+        }
+    }
+}
+
+/// Start (or clear) the frame counter the stall probe reads.
+#[cfg(target_os = "linux")]
+fn set_fanout_health(active: bool) {
+    if let Ok(mut health) = FANOUT_HEALTH.lock() {
+        *health = active.then(|| FanoutHealth {
+            frames: 0,
+            last_advance: std::time::Instant::now(),
+        });
+    }
+}
 
 /// The devices applications are meant to consume. Falls back to the raw scrcpy sink
 /// when no fan-out device exists, which is the pre-fan-out single-consumer behaviour.
@@ -615,43 +722,103 @@ fn start_webcam_fanout() {
     }
     let generation = FANOUT_GEN.load(Ordering::SeqCst);
 
-    std::thread::spawn(move || {
-        for attempt in 1..=FANOUT_ATTEMPTS {
-            let mut cmd = Command::new("ffmpeg");
-            cmd.args(["-loglevel", "error", "-f", "v4l2", "-i", WEBCAM_SINK]);
-            for sink in &sinks {
-                cmd.args(["-map", "0:v", "-f", "v4l2", "-pix_fmt", "yuv420p", sink]);
-            }
-            // No ffmpeg on the box: retrying won't conjure one.
-            let Ok(mut child) = cmd
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            else {
-                return;
-            };
+    std::thread::spawn(move || loop {
+        if FANOUT_GEN.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        // Ne lancer ffmpeg que quand scrcpy pousse réellement des images : après
+        // une éviction face-unlock la source peut rester muette bien plus
+        // longtemps que quelques tentatives, on l'attend au lieu d'abandonner.
+        if !webcam_sink_has_writer() {
+            std::thread::sleep(FANOUT_POLL);
+            continue;
+        }
 
-            std::thread::sleep(FANOUT_SETTLE);
-            if matches!(child.try_wait(), Ok(None)) {
-                let mut slot = match FANOUT.lock() {
-                    Ok(slot) => slot,
-                    Err(_) => return,
-                };
-                // Stopped while we were settling: don't resurrect it.
-                if FANOUT_GEN.load(Ordering::SeqCst) != generation {
-                    drop(slot);
-                    kill_child_tree(&mut child);
-                    return;
-                }
-                *slot = Some(child);
+        let mut cmd = Command::new("ffmpeg");
+        // `-progress pipe:1` turns stdout into the frame counter the stall probe
+        // reads; `-nostats` keeps the human-readable status line off it.
+        cmd.args([
+            "-loglevel",
+            "error",
+            "-nostats",
+            "-progress",
+            "pipe:1",
+            "-f",
+            "v4l2",
+            "-i",
+            WEBCAM_SINK,
+        ]);
+        for sink in &sinks {
+            cmd.args(["-map", "0:v", "-f", "v4l2", "-pix_fmt", "yuv420p", sink]);
+        }
+        // No ffmpeg on the box: retrying won't conjure one.
+        let Ok(mut child) = cmd
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        else {
+            return;
+        };
+
+        // Drain `-progress` from the start: an unread pipe eventually blocks ffmpeg.
+        set_fanout_health(true);
+        if let Some(stdout) = child.stdout.take() {
+            std::thread::spawn(move || track_fanout_progress(stdout, generation));
+        }
+
+        std::thread::sleep(FANOUT_SETTLE);
+        if !matches!(child.try_wait(), Ok(None)) {
+            // Mort pendant le settle : la source a pu se taire entre le sondage
+            // et le spawn, on repart l'attendre.
+            kill_child_tree(&mut child);
+            set_fanout_health(false);
+            std::thread::sleep(FANOUT_RETRY_DELAY);
+            continue;
+        }
+
+        {
+            let mut slot = match FANOUT.lock() {
+                Ok(slot) => slot,
+                Err(_) => return,
+            };
+            // Stopped while we were settling: don't resurrect it.
+            if FANOUT_GEN.load(Ordering::SeqCst) != generation {
+                drop(slot);
+                kill_child_tree(&mut child);
+                set_fanout_health(false);
                 return;
             }
-            kill_child_tree(&mut child);
-            if attempt < FANOUT_ATTEMPTS {
-                std::thread::sleep(FANOUT_RETRY_DELAY);
+            *slot = Some(child);
+        }
+
+        // Superviser : si ffmpeg meurt (crash, kill, -EBUSY tardif), on repart
+        // attendre le flux plutôt que de laisser les devices des applications
+        // orphelins. NB : la perte du writer ne suffit pas à le tuer —
+        // v4l2loopback ne remonte pas d'EOF et ffmpeg rediffuse la dernière
+        // image — c'est stop_webcam_fanout(), appelé sur les chemins d'arrêt
+        // de la webcam, qui couvre ce cas via le saut de génération.
+        loop {
+            std::thread::sleep(FANOUT_POLL);
+            let mut slot = match FANOUT.lock() {
+                Ok(slot) => slot,
+                Err(_) => return,
+            };
+            if FANOUT_GEN.load(Ordering::SeqCst) != generation {
+                // stop_webcam_fanout a déjà récupéré et tué l'enfant.
+                return;
+            }
+            match slot.as_mut().map(std::process::Child::try_wait) {
+                Some(Ok(None)) => {}
+                _ => {
+                    *slot = None;
+                    drop(slot);
+                    set_fanout_health(false);
+                    break;
+                }
             }
         }
+        std::thread::sleep(FANOUT_RETRY_DELAY);
     });
 }
 
@@ -666,6 +833,8 @@ pub fn stop_webcam_fanout() {
             kill_child_tree(&mut child);
         }
     }
+    // Plus de fan-out : plus de compteur d'images, donc plus de verdict « muet ».
+    set_fanout_health(false);
 }
 
 #[cfg(not(target_os = "linux"))]
