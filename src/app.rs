@@ -47,6 +47,10 @@ pub struct PhoneTvApp {
     pub webcam_started_at: Option<std::time::Instant>,
     /// Consecutive restarts after a short-lived stream; reset by any user action.
     pub webcam_auto_restarts: u32,
+    /// Wireless transport whose TCP/5555 listener *we* opened on the phone, kept so
+    /// teardown can close it again. `None` when the port was already open (someone
+    /// else's to close) or when the stream never left USB.
+    pub webcam_opened_port: Option<String>,
     pub mirror_child: Option<Child>,
     pub screenrecord_child: Option<Child>,
     pub screenrecord_remote: String,
@@ -163,6 +167,7 @@ impl PhoneTvApp {
             webcam_device_id: None,
             webcam_started_at: None,
             webcam_auto_restarts: 0,
+            webcam_opened_port: None,
             mirror_child: None,
             screenrecord_child: None,
             screenrecord_remote: String::new(),
@@ -389,15 +394,16 @@ impl PhoneTvApp {
                 std::thread::sleep(std::time::Duration::from_secs(2));
             }
             // Move onto wireless ADB (idempotent if `id` is already `ip:5555`).
-            let (stream_id, wifi) = match adb::enable_wifi_adb(&id) {
-                Some(wid) => (wid, true),
-                None => (id.clone(), false),
+            let (stream_id, wifi, opened_port) = match adb::enable_wifi_adb(&id) {
+                Some((wid, opened)) => (wid, true, opened),
+                None => (id.clone(), false, false),
             };
             let child = adb::start_webcam_process(&stream_id, front, with_mic, audio_output);
             let _ = tx.send(BgEvent::WebcamSwitched {
                 child,
                 device_id: stream_id,
                 wifi,
+                opened_port,
             });
             ctx.request_repaint();
         });
@@ -417,9 +423,24 @@ impl PhoneTvApp {
         }
     }
 
+    /// Close the phone's wireless-debug port if this app is what opened it.
+    ///
+    /// Only for a definitive stop — a FRONT/BACK switch goes through kill_webcam too
+    /// and still needs the transport it is about to reconnect on.
+    pub fn release_wifi_adb(&mut self) {
+        let Some(id) = self.webcam_opened_port.take() else {
+            return;
+        };
+        self.log("Fermeture du port ADB sans-fil sur le téléphone");
+        // Off the UI thread: the command tears down its own transport and can sit
+        // there a moment before adb gives up on it.
+        std::thread::spawn(move || adb::disable_wifi_adb(&id));
+    }
+
     pub fn stop_all(&mut self) {
         self.switching_cam = false;
         self.kill_webcam();
+        self.release_wifi_adb();
         self.webcam_device_id = None;
         self.kill_mirror();
         self.kill_tv_shell();
@@ -811,13 +832,19 @@ impl PhoneTvApp {
                     child,
                     device_id,
                     wifi,
+                    opened_port,
                 } => {
+                    if opened_port {
+                        self.webcam_opened_port = Some(device_id.clone());
+                    }
                     if !self.switching_cam {
-                        // A stop landed while we were (re)starting: discard the child.
+                        // A stop landed while we were (re)starting: discard the child,
+                        // and give back the port that start had just opened.
                         if let Some(mut c) = child {
                             adb::stop_webcam_fanout();
                             adb::kill_child_tree(&mut c);
                         }
+                        self.release_wifi_adb();
                     } else {
                         self.webcam_child = child;
                         self.webcam_active = self.webcam_child.is_some();
@@ -837,6 +864,8 @@ impl PhoneTvApp {
                         } else {
                             self.webcam_device_id = None;
                             self.log("Échec démarrage webcam");
+                            // Nothing is streaming: don't leave the phone listening.
+                            self.release_wifi_adb();
                         }
                     }
                 }
@@ -1126,6 +1155,7 @@ impl PhoneTvApp {
                     self.spawn_webcam(ctx);
                 } else {
                     self.log("Webcam fermée — la caméra reste occupée sur le téléphone");
+                    self.release_wifi_adb();
                 }
             }
         }
@@ -1144,6 +1174,7 @@ impl PhoneTvApp {
                 self.kill_webcam();
                 self.webcam_active = false;
                 self.log("Webcam muette malgré les relances — arrêt");
+                self.release_wifi_adb();
             }
         }
         if let Some(ref mut child) = self.mirror_child {

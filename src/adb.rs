@@ -26,6 +26,47 @@ pub fn adb_fire(id: &str, args: &[&str]) {
     let _ = Command::new("adb").args(&full_args).spawn();
 }
 
+/// Read several device properties in a single round trip.
+///
+/// Two costs stack up here, and neither is the work itself: an `adb shell` is ~30 ms
+/// of round trip, and every `getprop` is another ~20 ms of process spawn on the phone.
+/// Dumping the whole property table pays each once. Measured on a moto g14 over USB:
+///
+///   3 separate `adb shell getprop <p>`      90 ms
+///   3 `getprop` inside one `adb shell`      67 ms
+///   1 `adb shell getprop` (whole table)     36 ms
+///
+/// The 40 KB that comes back parses in microseconds, so the dump wins outright.
+/// Always returns exactly `props.len()` entries; a property the device does not
+/// define comes back empty, which is what the callers want.
+fn get_props(id: &str, props: &[&str]) -> Vec<String> {
+    let dump = adb_device(id, &["shell", "getprop"]).unwrap_or_default();
+    let table: std::collections::HashMap<&str, &str> =
+        dump.lines().filter_map(parse_getprop_line).collect();
+    props
+        .iter()
+        .map(|p| table.get(p).copied().unwrap_or_default().to_string())
+        .collect()
+}
+
+/// Split one line of a bare `getprop` dump, whose format is `[key]: [value]`.
+/// Returns `None` for anything that doesn't match, so junk lines drop out.
+fn parse_getprop_line(line: &str) -> Option<(&str, &str)> {
+    let (key, value) = line.split_once("]: [")?;
+    Some((key.strip_prefix('[')?, value.strip_suffix(']')?))
+}
+
+/// True when the identifying strings point at a TV rather than a handset.
+fn looks_like_tv(name: &str, features: &str, product: &str) -> bool {
+    let name = name.to_lowercase();
+    features.to_lowercase().contains("tv")
+        || product.to_lowercase().contains("tv")
+        || name.contains("tv")
+        || name.contains("shield")
+        || name.contains("chromecast")
+        || name.contains("mibox")
+}
+
 pub fn get_all_devices() -> Vec<Device> {
     let mut devices = Vec::new();
 
@@ -40,40 +81,35 @@ pub fn get_all_devices() -> Vec<Device> {
                 let id = parts[0].to_string();
                 let status = parts[1].to_string();
 
-                let name = if status == "device" {
-                    adb_device(&id, &["shell", "getprop", "ro.product.model"])
-                        .map(|s| s.trim().to_string())
-                        .unwrap_or_else(|| id.clone())
-                } else {
-                    parts
-                        .iter()
-                        .find(|p| p.starts_with("model:"))
-                        .map(|p| p.replace("model:", ""))
-                        .unwrap_or_else(|| id.clone())
-                };
-
-                let device_type = if status == "device" {
-                    let features =
-                        adb_device(&id, &["shell", "getprop", "ro.build.characteristics"])
-                            .unwrap_or_default()
-                            .to_lowercase();
-                    let product = adb_device(&id, &["shell", "getprop", "ro.product.name"])
-                        .unwrap_or_default()
-                        .to_lowercase();
-
-                    if features.contains("tv")
-                        || product.contains("tv")
-                        || name.to_lowercase().contains("tv")
-                        || name.to_lowercase().contains("shield")
-                        || name.to_lowercase().contains("chromecast")
-                        || name.to_lowercase().contains("mibox")
-                    {
+                let (name, device_type) = if status == "device" {
+                    let props = get_props(
+                        &id,
+                        &[
+                            "ro.product.model",
+                            "ro.build.characteristics",
+                            "ro.product.name",
+                        ],
+                    );
+                    let name = if props[0].is_empty() {
+                        id.clone()
+                    } else {
+                        props[0].clone()
+                    };
+                    let kind = if looks_like_tv(&name, &props[1], &props[2]) {
                         DeviceType::Tv
                     } else {
                         DeviceType::Phone
-                    }
+                    };
+                    (name, kind)
                 } else {
-                    DeviceType::Unknown
+                    // Unauthorized / offline: no shell to ask, so fall back to the
+                    // model `adb devices -l` already printed.
+                    let name = parts
+                        .iter()
+                        .find(|p| p.starts_with("model:"))
+                        .map(|p| p.replace("model:", ""))
+                        .unwrap_or_else(|| id.clone());
+                    (name, DeviceType::Unknown)
                 };
 
                 devices.push(Device {
@@ -271,16 +307,18 @@ pub fn connect_adb_wifi(addr: &str) -> bool {
 /// it over WiFi, so a stream bound to the returned id keeps running after the USB
 /// cable is unplugged.
 ///
-/// Returns the wireless device id (`ip:5555`) on success. If `id` is already a
-/// network transport (contains ':') it is returned unchanged. Returns `None` when the
-/// phone has no reachable WiFi IP or the wireless connection can't be established —
-/// callers should then fall back to the original (USB) transport.
-pub fn enable_wifi_adb(id: &str) -> Option<String> {
+/// Returns the wireless device id (`ip:5555`) and whether *this call* is what opened
+/// the port, so the caller can close what it opened and leave alone what it found
+/// already running. If `id` is already a network transport (contains ':') it is
+/// returned unchanged. Returns `None` when the phone has no reachable WiFi IP or the
+/// wireless connection can't be established — callers should then fall back to the
+/// original (USB) transport.
+pub fn enable_wifi_adb(id: &str) -> Option<(String, bool)> {
     use std::time::Duration;
 
     // Already a network transport (ip:port): nothing to switch.
     if id.contains(':') {
-        return Some(id.to_string());
+        return Some((id.to_string(), false));
     }
 
     // Read the phone's WiFi IP while the USB transport is still up.
@@ -291,7 +329,7 @@ pub fn enable_wifi_adb(id: &str) -> Option<String> {
     // A short, bounded TCP probe — `adb connect` itself can hang forever on an
     // unreachable host, so we never call it without first proving the port is open.
     if port_reachable(&addr, Duration::from_millis(600)) {
-        return connect_adb_wifi(&addr).then(|| addr.clone());
+        return connect_adb_wifi(&addr).then(|| (addr.clone(), false));
     }
 
     // Don't disturb the working USB transport if the phone's WiFi IP can't possibly
@@ -309,7 +347,21 @@ pub fn enable_wifi_adb(id: &str) -> Option<String> {
     if !wait_port_reachable(&addr, Duration::from_secs(3)) {
         return None; // caller falls back to the USB transport
     }
-    connect_adb_wifi(&addr).then(|| addr.clone())
+    connect_adb_wifi(&addr).then(|| (addr.clone(), true))
+}
+
+/// Put adbd back on USB only, closing the TCP/5555 listener this app opened.
+///
+/// `adb tcpip 5555` leaves the phone accepting debug connections from the whole LAN,
+/// and nothing ever took that back: the exposure outlived the stream that needed it,
+/// for as long as the phone stayed up. Only the caller that opened the port should
+/// call this — a port that was already open belongs to whoever opened it.
+///
+/// Sending `usb` over the wireless transport is what tears it down, so the command
+/// necessarily kills its own connection; a non-zero exit here is expected and says
+/// nothing about whether the port closed.
+pub fn disable_wifi_adb(id: &str) {
+    let _ = Command::new("adb").args(["-s", id, "usb"]).output();
 }
 
 /// True if a single TCP connect to `addr` succeeds within `timeout`. Never blocks
@@ -403,12 +455,29 @@ pub fn get_local_ip_prefix() -> Option<String> {
     }
 }
 
+/// How many probes the network scan runs at once.
+///
+/// One OS thread per host meant 254 of them for a /24, nearly all of it spent parked
+/// in `connect`, and 254 simultaneous SYNs is also the kind of burst consumer routers
+/// meter. The trade is latency, since the timeout dominates — measured on a quiet /24
+/// with the 400 ms budget below:
+///
+///   254 threads  0.46 s    32 workers  3.20 s
+///    96 workers  1.20 s    64 workers  1.60 s
+///
+/// 96 keeps under half the threads for well under a second of extra wait, on a scan
+/// that already runs off-thread behind a spinner.
+const SCAN_WORKERS: usize = 96;
+/// Per-host connect budget. Dominates the total: nearly every address on a home LAN
+/// is silent and costs the full timeout.
+const SCAN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(400);
+
 /// Scan the local /24 for hosts listening on TCP/5555 (ADB wireless port).
 /// Pure-Rust parallel scan — works on Linux, macOS and Windows.
 pub fn scan_network_for_adb() -> Vec<String> {
     use std::net::{SocketAddr, TcpStream};
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
 
     let prefix = match get_local_ip_prefix() {
         Some(p) => p,
@@ -416,14 +485,21 @@ pub fn scan_network_for_adb() -> Vec<String> {
     };
 
     let found: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let mut handles = Vec::with_capacity(254);
+    // Shared cursor rather than a fixed slice each: hosts that answer immediately
+    // cost nothing, so a worker that gets a fast range simply moves on to more.
+    let next = Arc::new(AtomicUsize::new(1));
+    let mut handles = Vec::with_capacity(SCAN_WORKERS);
 
-    for i in 1..=254u8 {
-        let ip = format!("{}{}", prefix, i);
-        let found = Arc::clone(&found);
-        handles.push(std::thread::spawn(move || {
+    for _ in 0..SCAN_WORKERS {
+        let (found, next, prefix) = (Arc::clone(&found), Arc::clone(&next), prefix.clone());
+        handles.push(std::thread::spawn(move || loop {
+            let host = next.fetch_add(1, AtomicOrdering::Relaxed);
+            if host > 254 {
+                return;
+            }
+            let ip = format!("{}{}", prefix, host);
             if let Ok(addr) = format!("{}:5555", ip).parse::<SocketAddr>() {
-                if TcpStream::connect_timeout(&addr, Duration::from_millis(400)).is_ok() {
+                if TcpStream::connect_timeout(&addr, SCAN_TIMEOUT).is_ok() {
                     if let Ok(mut v) = found.lock() {
                         v.push(ip);
                     }
@@ -840,12 +916,24 @@ pub fn stop_webcam_fanout() {
 #[cfg(not(target_os = "linux"))]
 pub fn stop_webcam_fanout() {}
 
-/// With v4l2loopback `exclusive_caps=1`, a loopback device only advertises capture
-/// capabilities while something is writing to it. If WirePlumber probed the device
-/// before the stream existed (e.g. right after boot), it never creates the
-/// PipeWire source node, and browsers that enumerate cameras through PipeWire
-/// (Firefox) don't see the camera even though direct-V4L2 apps (Discord) do.
-/// Once the stream is up, restart WirePlumber so it re-probes the devices.
+/// Make sure PipeWire actually publishes the fan-out devices as camera sources.
+///
+/// With `exclusive_caps=1` a loopback device advertises capture only while a writer
+/// holds it open. WirePlumber enumerates through udev at start-up and does not
+/// re-probe when a writer later appears — verified: opening a writer on an idle sink
+/// leaves the PipeWire node count at zero indefinitely. So a device configured that
+/// way and probed while idle stays invisible to everything that goes through
+/// PipeWire (Firefox), even though direct-V4L2 apps (Discord) still find it.
+///
+/// Restarting WirePlumber forces the re-probe, but it is a blunt instrument: it is
+/// the session manager for *audio* too, so every application's routing gets
+/// re-evaluated because a camera was missing.
+///
+/// The way to not need this at all is to give the fan-out sinks `exclusive_caps=0`
+/// (see setup-webcam.sh): they then advertise capture permanently, WirePlumber
+/// publishes them at boot, and the check below simply passes. The source keeps
+/// `exclusive_caps=1`, because [`webcam_sink_has_writer`] reads exactly that flip.
+/// The restart therefore only ever fires on setups predating that change.
 #[cfg(target_os = "linux")]
 fn ensure_pipewire_camera_node() {
     std::thread::spawn(|| {
@@ -854,9 +942,10 @@ fn ensure_pipewire_camera_node() {
             if pipewire_has_camera_sources() {
                 return;
             }
-            // Two attempts: scrcpy/ffmpeg may not have opened the sinks yet at the
-            // first check, so a restart then would re-probe still-idle devices.
-            if i == 1 || i == 4 {
+            // One restart, and not on the first pass: scrcpy and ffmpeg may not have
+            // opened the sinks yet, and re-probing still-idle devices achieves
+            // nothing but the disruption.
+            if i == 1 {
                 let _ = Command::new("systemctl")
                     .args(["--user", "restart", "wireplumber"])
                     .output();
@@ -1187,7 +1276,43 @@ pub fn take_screenshot(id: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_private_lan_ip, parse_device_lan_ip, parse_ls_output};
+    use super::{
+        is_private_lan_ip, looks_like_tv, parse_device_lan_ip, parse_getprop_line, parse_ls_output,
+    };
+
+    #[test]
+    fn parses_getprop_dump_lines() {
+        assert_eq!(
+            parse_getprop_line("[ro.product.model]: [moto g14]"),
+            Some(("ro.product.model", "moto g14"))
+        );
+        // Empty value: the property exists but is unset.
+        assert_eq!(
+            parse_getprop_line("[ro.build.characteristics]: []"),
+            Some(("ro.build.characteristics", ""))
+        );
+        // A bracket inside the value must not truncate it.
+        assert_eq!(
+            parse_getprop_line("[some.prop]: [a[b]c]"),
+            Some(("some.prop", "a[b]c"))
+        );
+        // Anything not in `[k]: [v]` form is not a property line.
+        assert_eq!(parse_getprop_line("garbage"), None);
+        assert_eq!(parse_getprop_line(""), None);
+    }
+
+    #[test]
+    fn recognises_tv_devices() {
+        // `ro.build.characteristics` is the reliable signal when it's there.
+        assert!(looks_like_tv("BRAVIA 4K", "tv,nosdcard", "atv"));
+        // Otherwise fall back to well-known names, case-insensitively.
+        assert!(looks_like_tv("NVIDIA SHIELD", "", ""));
+        assert!(looks_like_tv("Chromecast", "", ""));
+        assert!(looks_like_tv("MiBox S", "", ""));
+        // A handset must not be mistaken for one.
+        assert!(!looks_like_tv("moto g14", "default", "cancun_gen"));
+        assert!(!looks_like_tv("Pixel 8", "", ""));
+    }
 
     #[test]
     fn extracts_wlan_ip_from_ip_addr_output() {
