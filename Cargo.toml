@@ -23,6 +23,14 @@ chrono = "0.4"
 reqwest = { version = "0.13", features = ["json", "rustls", "blocking", "gzip", "brotli", "deflate"] }
 serde_json = "1"
 
+# The shipped binary is what users download, and it had drifted to 38.6 MB — most of
+# it debug tables Cargo keeps in release by default, plus per-CGU duplication. Only
+# the release workflow pays the slower link; CI builds the dev profile.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
 [[bin]]
 name = "phone-tv"
 path = "src/main.rs"
