@@ -59,4 +59,11 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Audit
-        run: cargo audit --deny warnings --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195 --ignore RUSTSEC-2026-0192
+        shell: bash
+        run: |
+          # deny.toml is the single source of truth for ignored advisories. A second
+          # hand-maintained list here drifts from it silently — an advisory dropped
+          # from deny.toml but left behind here stays muted with no trace of why.
+          mapfile -t ids < <(sed -n 's/^[[:space:]]*"\(RUSTSEC-[0-9-]*\)".*/\1/p' deny.toml)
+          echo "Ignored per deny.toml: ${ids[*]:-(none)}"
+          cargo audit --deny warnings ${ids[@]/#/--ignore=}

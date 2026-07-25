@@ -26,8 +26,12 @@ resolved.
 In scope:
 
 - Vulnerabilities in the application code (Rust crates under `src/`)
+- Vulnerabilities in the helper tooling under `scripts/` and `setup-webcam.sh` —
+  these drive ADB and serve backup data over HTTP, so they handle the same
+  sensitive material the application does
 - Supply chain issues in dependencies (`Cargo.toml` / `Cargo.lock`)
-- Issues in CI/CD workflows (`.github/workflows/`)
+- Issues in CI/CD workflows (`.github/workflows/`) and in the release build
+  scripts they invoke
 
 Out of scope:
 

@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Phone Backup Dashboard — local web UI to browse and search backup data."""
 
+import hmac
+import http.cookies
 import http.server
 import json
 import mimetypes
+import os
 import re
+import secrets
+import shlex
 import subprocess
 import urllib.parse
 from collections import Counter, defaultdict
@@ -16,7 +21,18 @@ LATEST_DIR = BACKUP_ROOT / "latest"
 EXPORTS_DIR = BACKUP_ROOT / "exports"
 ARCHIVES_DIR = BACKUP_ROOT / "archives"
 CONFIG_FILE = BACKUP_ROOT / "config.json"
-PORT = 8042
+PORT = int(os.environ.get("DASHBOARD_PORT", "8042"))
+
+# This dashboard serves the phone's SMS, contacts, call log, location history and
+# media, and can send SMS and place calls. Loopback only: binding it to the LAN hands
+# all of that to anyone who can route a packet here. DASHBOARD_HOST exists for
+# deliberate exposure (behind a tunnel or a reverse proxy), never as a default.
+BIND_HOST = os.environ.get("DASHBOARD_HOST", "127.0.0.1")
+# A token, so a hostile *process* on this machine can't just curl the port either.
+# Pin it via DASHBOARD_TOKEN to keep bookmarks working across restarts.
+TOKEN = os.environ.get("DASHBOARD_TOKEN") or secrets.token_urlsafe(32)
+COOKIE_NAME = "dash_token"
+
 
 # ── API Keys config ─────────────────────────────────────────────────
 def load_config():
@@ -29,6 +45,8 @@ def load_config():
 
 def save_config(cfg):
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+    # Holds third-party API keys: keep other local accounts out.
+    os.chmod(CONFIG_FILE, 0o600)
 
 _config = load_config()
 
@@ -2770,42 +2788,62 @@ def get_live_location():
     }
 
 
+def adb_shell(*words, timeout=10):
+    """Run a command on the device.
+
+    `adb shell` joins everything it is handed into one string and gives it to the
+    *device's* shell, so passing argv as a Python list buys no safety at all: every
+    untrusted word has to arrive already quoted. Callers quote theirs with
+    `shlex.quote`, whose POSIX single quotes the shell will not reinterpret.
+    """
+    return subprocess.run(
+        ["adb", "-s", DEVICE_SERIAL, "shell", " ".join(words)],
+        capture_output=True, text=True, timeout=timeout,
+    ).stdout.replace('\r', '')
+
+
+# A dialable number, and nothing that could be read as anything else.
+PHONE_RE = re.compile(r"[+0-9][0-9 ().\-]{2,24}")
+
+
 def send_sms(to, body):
     """Send SMS via ADB: open compose + tap send button."""
     import time
 
     if not to or not body:
         return {"ok": False, "error": "Numéro et message requis"}
+    if not PHONE_RE.fullmatch(to.strip()):
+        return {"ok": False, "error": "Numéro invalide"}
     if not is_device_connected():
         return {"ok": False, "error": "Téléphone non connecté"}
 
-    def sh(cmd, timeout=10):
-        """Run a full shell command string via adb."""
-        return subprocess.run(
-            ["adb", "-s", DEVICE_SERIAL, "shell", cmd],
-            capture_output=True, text=True, timeout=timeout
-        ).stdout.replace('\r', '')
+    to, body = to.strip(), str(body)
+
+    def compose():
+        adb_shell("am", "start", "-a", "android.intent.action.SENDTO",
+                  "-d", shlex.quote(f"smsto:{to}"),
+                  "--es", "sms_body", shlex.quote(body))
 
     try:
         # Wake + open SMS compose
-        sh("input keyevent KEYCODE_WAKEUP")
+        adb_shell("input", "keyevent", "KEYCODE_WAKEUP")
         time.sleep(0.3)
-        sh(f"am start -a android.intent.action.SENDTO -d 'smsto:{to}' --es sms_body '{body}'")
+        compose()
 
         # Wait and retry finding send button
         for attempt in range(6):
             time.sleep(2)
 
             # Is messaging app in foreground?
-            focus = sh("dumpsys window | grep mCurrentFocus")
+            focus = adb_shell("dumpsys", "window", "|", "grep", "mCurrentFocus")
             if "messaging" not in focus.lower() and "mms" not in focus.lower():
                 if attempt < 3:
-                    sh(f"am start -a android.intent.action.SENDTO -d 'smsto:{to}' --es sms_body '{body}'")
+                    compose()
                 continue
 
             # Dump UI
-            sh("uiautomator dump /sdcard/ui.xml")
-            xml = sh("cat /sdcard/ui.xml")
+            adb_shell("uiautomator", "dump", "/sdcard/ui.xml")
+            xml = adb_shell("cat", "/sdcard/ui.xml")
 
             # Find send button
             m = re.search(
@@ -2818,17 +2856,17 @@ def send_sms(to, body):
             if m:
                 x = (int(m.group(2)) + int(m.group(4))) // 2
                 y = (int(m.group(3)) + int(m.group(5))) // 2
-                sh(f"input tap {x} {y}")
+                adb_shell("input", "tap", str(x), str(y))
                 time.sleep(1)
-                sh("input keyevent KEYCODE_HOME")
+                adb_shell("input", "keyevent", "KEYCODE_HOME")
                 return {"ok": True, "message": f"SMS envoyé à {to}"}
 
-        sh("input keyevent KEYCODE_HOME")
+        adb_shell("input", "keyevent", "KEYCODE_HOME")
         return {"ok": False, "error": "Bouton Envoyer non trouvé après 6 essais"}
 
     except Exception as e:
         try:
-            sh("input keyevent KEYCODE_HOME")
+            adb_shell("input", "keyevent", "KEYCODE_HOME")
         except Exception:
             pass
         return {"ok": False, "error": str(e)}
@@ -2841,6 +2879,9 @@ def make_call(number):
     global _audio_process
     if not number:
         return {"ok": False, "error": "Numéro requis"}
+    if not PHONE_RE.fullmatch(number.strip()):
+        return {"ok": False, "error": "Numéro invalide"}
+    number = number.strip()
     if not is_device_connected():
         return {"ok": False, "error": "Téléphone non connecté"}
     try:
@@ -2854,11 +2895,10 @@ def make_call(number):
                 "--no-control",
             ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        # Initiate the call
-        subprocess.run([
-            "adb", "-s", DEVICE_SERIAL, "shell",
-            "am", "start", "-a", "android.intent.action.CALL", "-d", f"tel:{number}",
-        ], capture_output=True, timeout=5)
+        # Initiate the call. A Python list is not argv here — adb rejoins it for the
+        # device's shell — so the number is quoted, not merely interpolated.
+        adb_shell("am", "start", "-a", "android.intent.action.CALL",
+                  "-d", shlex.quote(f"tel:{number}"), timeout=5)
         return {"ok": True, "message": f"Appel vers {number} — audio routé vers le PC"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -2913,13 +2953,69 @@ def is_device_connected():
 
 
 class BackupHandler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def log_message(self, *a): pass
+
+    # ── Access control ──────────────────────────────────────────────
+    # Three separate things are being kept out, so there are three checks:
+    #   • the network — the socket only listens on loopback (BIND_HOST);
+    #   • other local processes — they don't have TOKEN;
+    #   • other *websites* the user visits — a page on evil.com can reach
+    #     127.0.0.1 from the victim's own browser, which would otherwise carry the
+    #     session cookie along and let it POST /api/sms/send. SameSite=Strict stops
+    #     the cookie from riding cross-site, the Host check stops the DNS-rebinding
+    #     variant that makes the request look same-site, and requiring a JSON
+    #     content type on writes stops the "simple request" form that dodges the
+    #     CORS preflight.
+
+    def _presented_token(self, query):
+        cookie = http.cookies.SimpleCookie(self.headers.get("Cookie", ""))
+        candidates = [
+            query.get("token", [None])[0],
+            self.headers.get("X-Auth-Token"),
+            cookie[COOKIE_NAME].value if COOKIE_NAME in cookie else None,
+        ]
+        return next((c for c in candidates if c), "")
+
+    def _authorized(self, query):
+        # compare_digest: no timing oracle on the token.
+        return hmac.compare_digest(self._presented_token(query), TOKEN)
+
+    def _host_ok(self):
+        """Reject a Host we never bound, which is how DNS rebinding announces itself:
+        the browser resolves attacker.com to 127.0.0.1 and treats us as its origin."""
+        host = self.headers.get("Host", "").rsplit(":", 1)[0].strip("[]")
+        return host in ("localhost", "127.0.0.1", "::1", BIND_HOST)
+
+    def _deny(self, code=403):
+        self._respond(code, "text/plain; charset=utf-8",
+                      "Accès refusé. Ouvrez l'URL affichée au démarrage "
+                      "(elle contient le jeton).".encode())
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
-        length = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(length)) if length else {}
+        query = urllib.parse.parse_qs(parsed.query)
+
+        if not self._host_ok() or not self._authorized(query):
+            return self._deny()
+        # A cross-site form/fetch cannot set this without triggering a preflight.
+        if not self.headers.get("Content-Type", "").startswith("application/json"):
+            return self._deny(415)
+
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            return self._deny(400)
+        if length > 1_000_000:
+            return self._deny(413)
+        try:
+            body = json.loads(self.rfile.read(length)) if length else {}
+        except (ValueError, UnicodeDecodeError):
+            return self._deny(400)
+        if not isinstance(body, dict):
+            return self._deny(400)
 
         if path == "/api/config":
             global _config
@@ -2947,6 +3043,19 @@ class BackupHandler(http.server.BaseHTTPRequestHandler):
         path = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
 
+        if not self._host_ok() or not self._authorized(query):
+            return self._deny()
+        # Arriving via the startup link: trade ?token= for a cookie, so the token
+        # stops showing up in the address bar (and in any Referer we might emit).
+        if query.get("token") and path in ("/", "/index.html"):
+            return self._set_cookie_and_redirect(path)
+
+        def _since():
+            try:
+                return int(query.get("since", ["0"])[0])
+            except ValueError:
+                return 0
+
         routes = {
             "/": lambda: self._html(DASHBOARD_HTML),
             "/index.html": lambda: self._html(DASHBOARD_HTML),
@@ -2960,8 +3069,8 @@ class BackupHandler(http.server.BaseHTTPRequestHandler):
             "/api/files": lambda: self._json(self._list_files(query.get("path", [""])[0])),
             "/api/osint": lambda: self._json(self._get_osint()),
             "/api/live/status": lambda: self._json({"connected": is_device_connected()}),
-            "/api/live/sms": lambda: self._json(get_live_sms(int(query.get("since", [0])[0]))),
-            "/api/live/calls": lambda: self._json(get_live_calls(int(query.get("since", [0])[0]))),
+            "/api/live/sms": lambda: self._json(get_live_sms(_since())),
+            "/api/live/calls": lambda: self._json(get_live_calls(_since())),
             "/api/live/location": lambda: self._json(get_live_location()),
             "/api/location/history": lambda: self._json(load_location_history()),
             "/api/location/extract": lambda: self._json({"count": len(extract_all_locations())}),
@@ -2990,6 +3099,13 @@ class BackupHandler(http.server.BaseHTTPRequestHandler):
 
     def _list_files(self, rel_path):
         base = LATEST_DIR / rel_path if rel_path else LATEST_DIR
+        # `?path=/etc` or `?path=../..` escapes the backup tree: pathlib lets an
+        # absolute operand replace the base outright, and `..` walks out of it.
+        # Same containment check _serve_media already does.
+        try:
+            base.resolve().relative_to(LATEST_DIR.resolve())
+        except (ValueError, OSError):
+            return {"items": []}
         if not base.exists() or not base.is_dir():
             return {"items": []}
         items = []
@@ -3031,6 +3147,16 @@ class BackupHandler(http.server.BaseHTTPRequestHandler):
             return self._respond(403, "text/plain", b"Forbidden")
         self._respond(200, mimetypes.guess_type(str(fp))[0] or "application/octet-stream", fp.read_bytes())
 
+    def _set_cookie_and_redirect(self, path):
+        self.send_response(303)
+        self.send_header("Location", path)
+        # HttpOnly: no XSS in the dashboard can read it back out.
+        # SameSite=Strict: no cross-site request carries it — the CSRF defence.
+        self.send_header("Set-Cookie",
+                         f"{COOKIE_NAME}={TOKEN}; Path=/; HttpOnly; SameSite=Strict")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _html(self, c): self._respond(200, "text/html; charset=utf-8", c.encode())
     def _json(self, o): self._respond(200, "application/json", json.dumps(o, ensure_ascii=False).encode())
     def _text(self, c): self._respond(200, "text/plain; charset=utf-8", c.encode())
@@ -3039,7 +3165,12 @@ class BackupHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ct)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Cache-Control", "no-store")
+        # The pages carry SMS, contacts and positions: keep them out of any
+        # cross-origin embed and out of outbound Referer headers.
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         self.wfile.write(body)
 
@@ -3052,8 +3183,14 @@ def _human(b):
 
 
 if __name__ == "__main__":
-    srv = http.server.HTTPServer(("0.0.0.0", PORT), BackupHandler)
-    print(f"📱 Backup Dashboard → http://localhost:{PORT}")
+    # Threading: a single-threaded server is stalled for the whole duration of any
+    # adb call, which the live endpoints make constantly.
+    srv = http.server.ThreadingHTTPServer((BIND_HOST, PORT), BackupHandler)
+    print(f"📱 Backup Dashboard → http://{BIND_HOST}:{PORT}/?token={TOKEN}")
+    print("   ↑ ce lien contient le jeton de session — ne le partagez pas.")
+    if BIND_HOST not in ("127.0.0.1", "::1", "localhost"):
+        print(f"   ⚠️  Écoute sur {BIND_HOST} : SMS, contacts, appels, positions et")
+        print("       médias sont exposés à tout le réseau. Préférez un tunnel SSH.")
     print(f"   Backup: {BACKUP_ROOT}")
     try: srv.serve_forever()
     except KeyboardInterrupt: print("\nStop."); srv.server_close()

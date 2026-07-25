@@ -47,7 +47,23 @@ pub fn config_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("phone-tv");
     let _ = std::fs::create_dir_all(&dir);
+    // The directory holds an OpenRouter API key: keep other local accounts out.
+    restrict_to_owner(&dir, 0o700);
     dir
+}
+
+/// Narrow a path to owner-only access. A no-op off Unix, where the config lives
+/// under a per-user profile directory anyway.
+fn restrict_to_owner(path: &std::path::Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, mode);
+    }
 }
 
 fn settings_path() -> PathBuf {
@@ -63,7 +79,12 @@ pub fn load_settings() -> Settings {
 
 pub fn save_settings(settings: &Settings) {
     if let Ok(s) = toml::to_string_pretty(settings) {
-        let _ = std::fs::write(settings_path(), s);
+        let path = settings_path();
+        if std::fs::write(&path, s).is_ok() {
+            // settings.toml stores `openrouter_api_key` in clear: default file
+            // creation would leave it 0644, readable by every local account.
+            restrict_to_owner(&path, 0o600);
+        }
     }
 }
 
