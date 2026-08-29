@@ -1057,6 +1057,8 @@ pub fn start_mirror_process(id: &str, stay_awake: bool, audio: AudioMode) -> Opt
         "-s".to_string(),
         id.to_string(),
         "--turn-screen-off".to_string(),
+        // Leave the phone dark on the way out, whatever state the session ended in.
+        "--power-off-on-close".to_string(),
     ];
     args.extend(audio.scrcpy_args());
     if stay_awake {

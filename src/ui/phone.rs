@@ -255,8 +255,9 @@ pub fn draw_phone(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut app.stay_awake, "☀ Stay Awake")
                         .on_hover_text(
-                            "Empêche le téléphone de se rendormir pendant le \
-                             mirroring — écran allumé, donc batterie",
+                            "Garde l'appareil éveillé pendant le mirroring, dalle \
+                             éteinte. Décoché, le téléphone dort vraiment et le \
+                             mirroring devient noir",
                         );
                     if ui
                         .button("🌙 Écran éteint")

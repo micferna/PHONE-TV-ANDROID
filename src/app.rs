@@ -198,10 +198,12 @@ impl PhoneTvApp {
             cam_front: true,
             webcam_audio,
             mirror_audio,
-            // Off by default: mirroring already starts with the screen off, and the
-            // pin outlives the first touch — one wake and the phone stays lit for
-            // the whole session. Opt in when you really want it.
-            stay_awake: false,
+            // On, and it has to be: paired with `--turn-screen-off` this is what
+            // keeps the *device* awake while the *panel* stays dark. Switch it off
+            // and the phone really sleeps — display composition stops with it, so
+            // the mirror goes black. The battery bug was never this flag, it was the
+            // pin outliving scrcpy; see `kill_mirror`.
+            stay_awake: true,
             webcam_active: false,
             mirror_active: false,
             webcam_child: None,
