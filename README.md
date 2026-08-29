@@ -13,7 +13,8 @@ Application de bureau en Rust pour contrôler vos téléphones et TV Android dep
 **Contrôle Téléphone :**
 - Streaming webcam (caméra avant/arrière) vers des périphériques virtuels v4l2loopback, jusqu'à 4 applications simultanées (Discord, OBS, navigateur…)
 - Capture micro optionnelle (micro du téléphone ou audio des apps)
-- Mirroring d'écran via scrcpy
+- Mirroring d'écran via scrcpy, avec le son du téléphone dans le casque du PC
+- Choix du son capté (webcam et mirroring) : Aucun / Micro / Média / Tout — « Tout » est le seul mode qui transmet les sons de notification (Snap, Messenger…), en échange le haut-parleur du téléphone se tait
 - Transfert de fichiers vidéo vers le téléphone avec suivi de progression
 - Streaming vidéo par URL
 - Boutons rapides : Caméra, Vidéo, Micro, Home, Back
@@ -40,6 +41,7 @@ Application de bureau en Rust pour contrôler vos téléphones et TV Android dep
 - Sauvegarde APK avant suppression + restauration en un clic
 - Détection des apps réinstallées entre deux audits
 - Historique par appareil (sessions, scores, profils)
+- Monitoring surveillé : alertes (son + notification bureau) sur les nouveaux processus, les pics de données WiFi/mobile par app et les wakelocks trop longs
 - Export du rapport en Markdown
 
 **Gestion des appareils :**

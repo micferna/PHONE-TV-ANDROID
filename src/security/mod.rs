@@ -1,3 +1,4 @@
+pub mod alerts;
 pub mod apps;
 pub mod bulletins;
 pub mod monitoring;
