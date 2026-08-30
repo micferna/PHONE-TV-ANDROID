@@ -975,8 +975,8 @@ impl PhoneTvApp {
                 ctx.request_repaint();
 
                 // Sliced so switching the watch off doesn't wait out a 60 s interval.
-                let deadline = std::time::Instant::now()
-                    + std::time::Duration::from_secs(s.interval_secs);
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_secs(s.interval_secs);
                 while std::time::Instant::now() < deadline {
                     if stop_thread.load(Ordering::Relaxed) {
                         return;

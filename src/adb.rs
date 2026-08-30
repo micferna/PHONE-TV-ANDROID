@@ -571,7 +571,9 @@ pub fn kill_child_tree(child: &mut Child) {
     }
     #[cfg(windows)]
     {
-        let _ = Command::new("taskkill").args(["/F", "/T", "/PID", &pid]).output();
+        let _ = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid])
+            .output();
     }
     let _ = child.kill();
     let _ = child.wait();
