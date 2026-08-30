@@ -106,6 +106,15 @@ pub enum BgEvent {
     SecurityWakelocks {
         wakelocks: Vec<WakelockInfo>,
     },
+    /// One full round of the background watch: the three dumps plus the alerts it
+    /// already raised. The thread owns the diffing so alerts fire even when the
+    /// window is hidden and no frame is being drawn.
+    MonitoringWatch {
+        processes: Vec<ProcessInfo>,
+        usage: Vec<DataUsage>,
+        wakelocks: Vec<WakelockInfo>,
+        alerts: Vec<MonitoringAlert>,
+    },
     SecurityPosture {
         checks: Vec<DevicePosture>,
     },
@@ -352,4 +361,98 @@ pub enum AppSort {
     Name,
     InstallDate,
     Source,
+}
+
+/// Severity of a monitoring alert, which drives its colour in the UI.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum AlertLevel {
+    Info,
+    Warning,
+    Danger,
+}
+
+/// One thing that changed on the device while monitoring was watching.
+#[derive(Clone, Debug)]
+pub struct MonitoringAlert {
+    /// Local time the alert fired, `HH:MM:SS`.
+    pub time: String,
+    pub level: AlertLevel,
+    pub message: String,
+}
+
+/// What scrcpy captures on the audio side of a stream.
+///
+/// The distinction that matters in practice is `Media` vs `All`: Android's playback
+/// capture API only hands over media, and lets apps opt out of even that, so
+/// notification sounds — Snapchat, Messenger, WhatsApp — never come through it. Only
+/// the whole-output capture carries them, and it takes the sound off the phone
+/// speaker in exchange.
+#[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
+pub enum AudioMode {
+    /// No audio stream at all.
+    Off,
+    /// The phone's microphone.
+    Mic,
+    /// App playback, duplicated so the phone keeps making sound. No notifications.
+    Media,
+    /// Everything the phone plays, notifications included; the phone goes silent.
+    All,
+}
+
+impl AudioMode {
+    /// The scrcpy flags for this mode.
+    pub fn scrcpy_args(self) -> Vec<String> {
+        match self {
+            AudioMode::Off => vec!["--no-audio".to_string()],
+            AudioMode::Mic => vec!["--audio-source=mic".to_string()],
+            AudioMode::Media => vec![
+                "--audio-source=playback".to_string(),
+                "--audio-dup".to_string(),
+            ],
+            AudioMode::All => vec!["--audio-source=output".to_string()],
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            AudioMode::Off => "\u{1f507} Aucun",
+            AudioMode::Mic => "\u{1f3a4} Micro",
+            AudioMode::Media => "\u{1f3b5} Média",
+            AudioMode::All => "\u{1f50a} Tout",
+        }
+    }
+
+    pub fn hint(self) -> &'static str {
+        match self {
+            AudioMode::Off => "Aucun son du téléphone sur le PC.",
+            AudioMode::Mic => "Le micro du téléphone (Android 11+).",
+            AudioMode::Media => {
+                "Le son des apps, qui continue aussi sur le téléphone \
+                                 (Android 13+). Les sons de notification (Snap, Messenger…) \
+                                 ne passent pas : Android ne les expose pas, et une app peut \
+                                 refuser d'être capturée."
+            }
+            AudioMode::All => {
+                "Tout ce que joue le téléphone, notifications comprises \
+                               (Android 11+). En contrepartie le haut-parleur du téléphone \
+                               se tait pendant le stream."
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod audio_mode_tests {
+    use super::AudioMode;
+
+    #[test]
+    fn only_whole_output_capture_carries_notifications() {
+        // "playback" lets apps opt out and never exposes notification sounds, so the
+        // mode meant to carry them must ask for the whole output instead.
+        assert_eq!(AudioMode::All.scrcpy_args(), ["--audio-source=output"]);
+        assert!(AudioMode::Media
+            .scrcpy_args()
+            .contains(&"--audio-dup".to_string()));
+        assert_eq!(AudioMode::Off.scrcpy_args(), ["--no-audio"]);
+    }
 }

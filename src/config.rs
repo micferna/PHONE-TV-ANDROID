@@ -1,7 +1,7 @@
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
-use crate::types::TvChannel;
+use crate::types::{AudioMode, TvChannel};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Settings {
@@ -15,6 +15,43 @@ pub struct Settings {
     /// Destination folder on the PC for files retrieved from the phone.
     #[serde(default = "default_pull_dest")]
     pub pull_dest_dir: String,
+    /// Audio captured by the webcam stream.
+    #[serde(default = "default_webcam_audio")]
+    pub webcam_audio: AudioMode,
+    /// Audio captured by the mirroring window.
+    #[serde(default = "default_mirror_audio")]
+    pub mirror_audio: AudioMode,
+    /// Play a sound when the monitoring watch raises alerts.
+    #[serde(default = "default_true")]
+    pub monitoring_sound: bool,
+    /// Also raise a desktop notification, so alerts land when the window is hidden.
+    #[serde(default = "default_true")]
+    pub monitoring_desktop_notify: bool,
+    /// Seconds between two watch polls. Each poll is three `dumpsys` dumps, which
+    /// keep the phone out of doze, so the cheap end of the range is opt-in.
+    #[serde(default = "default_monitoring_interval")]
+    pub monitoring_interval_secs: u64,
+}
+
+/// Fast enough to notice a process appear, slow enough that a watch left running
+/// overnight is not what empties the battery.
+fn default_monitoring_interval() -> u64 {
+    15
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// The webcam is a video device first: audio off unless asked for.
+fn default_webcam_audio() -> AudioMode {
+    AudioMode::Off
+}
+
+/// Mirroring is for watching the phone, so it comes with the phone's sound —
+/// including the notification sounds, which only whole-output capture carries.
+fn default_mirror_audio() -> AudioMode {
+    AudioMode::All
 }
 
 fn default_llm_model() -> String {
@@ -38,6 +75,11 @@ impl Default for Settings {
             openrouter_api_key: String::new(),
             llm_model: default_llm_model(),
             pull_dest_dir: default_pull_dest(),
+            webcam_audio: default_webcam_audio(),
+            mirror_audio: default_mirror_audio(),
+            monitoring_sound: true,
+            monitoring_desktop_notify: true,
+            monitoring_interval_secs: default_monitoring_interval(),
         }
     }
 }

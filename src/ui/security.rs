@@ -238,6 +238,36 @@ fn trigger_processes_load(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: 
     });
 }
 
+fn trigger_data_usage_load(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &str) {
+    if app.security_data_usage_loading {
+        return;
+    }
+    app.security_data_usage_loading = true;
+    let tx = app.bg_tx.clone();
+    let ctx2 = ctx.clone();
+    let id = device_id.to_string();
+    std::thread::spawn(move || {
+        let usage = crate::security::monitoring::get_data_usage(&id);
+        let _ = tx.send(BgEvent::SecurityDataUsage { usage });
+        ctx2.request_repaint();
+    });
+}
+
+fn trigger_wakelocks_load(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &str) {
+    if app.security_wakelocks_loading {
+        return;
+    }
+    app.security_wakelocks_loading = true;
+    let tx = app.bg_tx.clone();
+    let ctx2 = ctx.clone();
+    let id = device_id.to_string();
+    std::thread::spawn(move || {
+        let wakelocks = crate::security::monitoring::get_wakelocks(&id);
+        let _ = tx.send(BgEvent::SecurityWakelocks { wakelocks });
+        ctx2.request_repaint();
+    });
+}
+
 fn trigger_permissions_load(app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &str) {
     if app.security_permissions_loading {
         return;
@@ -374,7 +404,15 @@ pub fn draw_security(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Contex
                         None
                     },
                 ),
-                (SecurityView::Monitoring, "\u{1f4ca} Monitoring", None),
+                (
+                    SecurityView::Monitoring,
+                    "\u{1f4ca} Monitoring",
+                    if app.monitoring_unseen > 0 {
+                        Some(theme::warning_color())
+                    } else {
+                        None
+                    },
+                ),
                 (SecurityView::Posture, "\u{2699} Posture", None),
             ];
 
@@ -2140,11 +2178,173 @@ fn draw_monitoring(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context)
         });
     });
 
+    draw_monitoring_watch(ui, app, ctx, &device_id);
+    draw_monitoring_alerts(ui, app);
+
     match app.security_monitoring_view {
         MonitoringView::Processes => draw_processes(ui, app, ctx, &device_id),
         MonitoringView::DataUsage => draw_data_usage(ui, app, ctx, &device_id),
         MonitoringView::Wakelocks => draw_wakelocks(ui, app, ctx, &device_id),
     }
+}
+
+/// The intervals offered for the watch, in seconds.
+///
+/// Each poll is three `dumpsys` dumps; at 5 s the phone never gets to doze, which is
+/// what a long watch costs in battery. Hence a choice, and a default that is not 5 s.
+const MONITORING_WATCH_INTERVALS: [u64; 4] = [5, 15, 30, 60];
+
+/// The watch bar: one switch that keeps polling all three dumps — whichever sub-tab
+/// is open — so alerts keep coming while the user reads the process list, plus how
+/// loudly they are announced.
+fn draw_monitoring_watch(
+    ui: &mut egui::Ui,
+    app: &mut PhoneTvApp,
+    ctx: &egui::Context,
+    device_id: &str,
+) {
+    let dark = app.dark_mode;
+
+    // The polling itself lives in a background thread (see `sync_monitoring_watch`),
+    // so it survives a hidden window; here we only keep the countdown ticking.
+    if app.monitoring_watch {
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+    }
+
+    section(ui, dark, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            let mut watch = app.monitoring_watch;
+            if ui
+                .checkbox(&mut watch, "\u{1f514} Surveillance")
+                .on_hover_text(
+                    "Relit processus, données réseau et wakelocks à intervalle \
+                     régulier et signale ce qui a changé",
+                )
+                .changed()
+            {
+                app.monitoring_watch = watch;
+                // The thread polls as soon as it starts; until its first round lands
+                // the counter has nothing to show.
+                app.monitoring_watch_last = ctx.input(|i| i.time);
+            }
+
+            // Slower polling lets the phone doze between two dumps.
+            let mut interval = app.settings.monitoring_interval_secs;
+            egui::ComboBox::from_id_salt("monitoring_interval")
+                .selected_text(format!("toutes les {}s", interval))
+                .width(120.0)
+                .show_ui(ui, |ui| {
+                    for secs in MONITORING_WATCH_INTERVALS {
+                        ui.selectable_value(&mut interval, secs, format!("toutes les {}s", secs));
+                    }
+                });
+            if interval != app.settings.monitoring_interval_secs {
+                app.settings.monitoring_interval_secs = interval;
+                app.save_settings();
+            }
+
+            let mut sound = app.settings.monitoring_sound;
+            if ui
+                .checkbox(&mut sound, "\u{1f50a} Son")
+                .on_hover_text("Bip à chaque nouvelle salve d'alertes")
+                .changed()
+            {
+                app.settings.monitoring_sound = sound;
+                app.save_settings();
+            }
+
+            let mut desktop = app.settings.monitoring_desktop_notify;
+            if ui
+                .checkbox(&mut desktop, "\u{1f5a5} Notif bureau")
+                .on_hover_text("Notification système (notify-send), visible fenêtre masquée")
+                .changed()
+            {
+                app.settings.monitoring_desktop_notify = desktop;
+                app.save_settings();
+            }
+
+            // Surveiller n'a aucune raison de garder l'écran allumé : de quoi le
+            // recoucher sans passer par le téléphone.
+            if ui
+                .button("\u{1f319} Écran éteint")
+                .on_hover_text("Coupe le « stay awake » et rendort l'écran du téléphone")
+                .clicked()
+            {
+                crate::adb::screen_off(device_id);
+                app.stay_awake = false;
+                app.log("Écran du téléphone éteint (stay awake coupé)");
+            }
+
+            if app.monitoring_watch {
+                let now = ctx.input(|i| i.time);
+                let elapsed = (now - app.monitoring_watch_last).max(0.0) as u64;
+                ui.label(
+                    egui::RichText::new(format!("\u{25cf} actif — MAJ il y a {}s", elapsed))
+                        .small()
+                        .color(theme::success_color()),
+                );
+            } else {
+                ui.label(
+                    egui::RichText::new("Coupée : les alertes n'arrivent qu'au rafraîchissement")
+                        .small()
+                        .color(theme::text_secondary(dark)),
+                );
+            }
+        });
+    });
+}
+
+/// The alert feed, newest first, shown whatever the open sub-tab.
+fn draw_monitoring_alerts(ui: &mut egui::Ui, app: &mut PhoneTvApp) {
+    let dark = app.dark_mode;
+    // Reaching this view is what marks the alerts as read.
+    app.monitoring_unseen = 0;
+
+    section(ui, dark, |ui| {
+        ui.horizontal(|ui| {
+            section_title(ui, "\u{1f6a8} Alertes");
+            ui.label(
+                egui::RichText::new(format!("{}", app.monitoring_alerts.len()))
+                    .color(theme::text_secondary(dark)),
+            );
+            if !app.monitoring_alerts.is_empty() && ui.small_button("Effacer").clicked() {
+                app.monitoring_alerts.clear();
+            }
+        });
+
+        if app.monitoring_alerts.is_empty() {
+            ui.label(
+                egui::RichText::new(
+                    "Aucune alerte. Active la surveillance : nouveau processus, pic de \
+                     données WiFi ou mobile, wakelock trop long.",
+                )
+                .small()
+                .color(theme::text_secondary(dark)),
+            );
+            return;
+        }
+
+        egui::ScrollArea::vertical()
+            .max_height(120.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for alert in app.monitoring_alerts.iter().rev() {
+                    let color = match alert.level {
+                        AlertLevel::Danger => theme::danger_color(),
+                        AlertLevel::Warning => theme::warning_color(),
+                        AlertLevel::Info => theme::text_secondary(dark),
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(&alert.time)
+                                .small()
+                                .color(theme::text_dim(dark)),
+                        );
+                        ui.label(egui::RichText::new(&alert.message).size(12.0).color(color));
+                    });
+                }
+            });
+    });
 }
 
 fn draw_processes(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context, device_id: &str) {
@@ -2295,16 +2495,8 @@ fn draw_data_usage(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context,
     let dark = app.dark_mode;
 
     // Auto-load (with guard)
-    if app.security_data_usage.is_empty() && !app.security_data_usage_loading {
-        app.security_data_usage_loading = true;
-        let tx = app.bg_tx.clone();
-        let ctx2 = ctx.clone();
-        let id = device_id.to_string();
-        std::thread::spawn(move || {
-            let usage = crate::security::monitoring::get_data_usage(&id);
-            let _ = tx.send(BgEvent::SecurityDataUsage { usage });
-            ctx2.request_repaint();
-        });
+    if app.security_data_usage.is_empty() {
+        trigger_data_usage_load(app, ctx, device_id);
     }
 
     ui.horizontal(|ui| {
@@ -2318,14 +2510,7 @@ fn draw_data_usage(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context,
             )
             .clicked()
         {
-            let tx = app.bg_tx.clone();
-            let ctx2 = ctx.clone();
-            let id = device_id.to_string();
-            std::thread::spawn(move || {
-                let usage = crate::security::monitoring::get_data_usage(&id);
-                let _ = tx.send(BgEvent::SecurityDataUsage { usage });
-                ctx2.request_repaint();
-            });
+            trigger_data_usage_load(app, ctx, device_id);
         }
         ui.label(
             egui::RichText::new("Données cumulées depuis le dernier reset")
@@ -2393,16 +2578,8 @@ fn draw_wakelocks(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context, 
     let dark = app.dark_mode;
 
     // Auto-load (with guard)
-    if app.security_wakelocks.is_empty() && !app.security_wakelocks_loading {
-        app.security_wakelocks_loading = true;
-        let tx = app.bg_tx.clone();
-        let ctx2 = ctx.clone();
-        let id = device_id.to_string();
-        std::thread::spawn(move || {
-            let wakelocks = crate::security::monitoring::get_wakelocks(&id);
-            let _ = tx.send(BgEvent::SecurityWakelocks { wakelocks });
-            ctx2.request_repaint();
-        });
+    if app.security_wakelocks.is_empty() {
+        trigger_wakelocks_load(app, ctx, device_id);
     }
 
     ui.horizontal(|ui| {
@@ -2416,14 +2593,7 @@ fn draw_wakelocks(ui: &mut egui::Ui, app: &mut PhoneTvApp, ctx: &egui::Context, 
             )
             .clicked()
         {
-            let tx = app.bg_tx.clone();
-            let ctx2 = ctx.clone();
-            let id = device_id.to_string();
-            std::thread::spawn(move || {
-                let wakelocks = crate::security::monitoring::get_wakelocks(&id);
-                let _ = tx.send(BgEvent::SecurityWakelocks { wakelocks });
-                ctx2.request_repaint();
-            });
+            trigger_wakelocks_load(app, ctx, device_id);
         }
         ui.label(
             egui::RichText::new(format!("{} wakelock(s)", app.security_wakelocks.len()))

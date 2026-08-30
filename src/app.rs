@@ -1,18 +1,40 @@
 use eframe::egui;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use crate::adb;
 use crate::config::{self, Settings};
+use crate::security;
 use crate::theme;
 use crate::types::*;
 use crate::ui;
 use crate::wizard::types::WizardState;
+
+/// What the background watch is currently set up to do.
+///
+/// Everything the watch thread reads is copied in here at spawn time, so a change to
+/// any of it is visible as a plain inequality: the thread is stopped and respawned
+/// rather than made to share state with the UI.
+#[derive(Clone, PartialEq)]
+pub struct MonitoringWatchSpec {
+    pub device_id: String,
+    pub interval_secs: u64,
+    pub sound: bool,
+    pub desktop: bool,
+    pub blacklist: Vec<String>,
+}
+
+/// A running watch thread and the switch that stops it.
+pub struct MonitoringWatchTask {
+    pub spec: MonitoringWatchSpec,
+    pub stop: Arc<AtomicBool>,
+}
 
 /// Face unlock evicts scrcpy from the camera on every lock-screen wake, so a webcam
 /// session legitimately needs restarting now and then. Cap consecutive restarts of a
@@ -32,8 +54,11 @@ pub struct PhoneTvApp {
     pub logs_collapsed: bool,
     // Phone options
     pub cam_front: bool,
-    pub with_mic: bool,
-    pub audio_output: bool,
+    /// What the webcam stream captures on the audio side.
+    pub webcam_audio: AudioMode,
+    /// Same, for the mirroring window — where the phone's notification sounds are
+    /// what the user actually wants in their headset.
+    pub mirror_audio: AudioMode,
     pub stay_awake: bool,
     pub webcam_active: bool,
     pub mirror_active: bool,
@@ -128,6 +153,17 @@ pub struct PhoneTvApp {
     pub security_data_usage_loading: bool,
     pub security_wakelocks: Vec<WakelockInfo>,
     pub security_wakelocks_loading: bool,
+    // Monitoring alerts: what changed between two polls, and how loudly to say it
+    pub monitoring_watch: bool,
+    pub monitoring_watch_last: f64,
+    /// The thread doing the polling, when the watch is on.
+    pub monitoring_watch_task: Option<MonitoringWatchTask>,
+    pub monitoring_alerts: Vec<MonitoringAlert>,
+    /// Alerts that arrived while the user was looking somewhere else.
+    pub monitoring_unseen: usize,
+    pub monitoring_prev_processes: Option<HashSet<String>>,
+    pub monitoring_prev_data: Option<HashMap<String, (u64, u64)>>,
+    pub monitoring_prev_wakelocks: Option<HashMap<String, u64>>,
     pub security_posture: Vec<DevicePosture>,
     pub security_posture_loading: bool,
     pub security_permissions_loading: bool,
@@ -149,6 +185,8 @@ impl PhoneTvApp {
         let (bg_tx, bg_rx) = mpsc::channel();
         let dark_mode = settings.dark_mode;
         let pull_dest_dir = settings.pull_dest_dir.clone();
+        let webcam_audio = settings.webcam_audio;
+        let mirror_audio = settings.mirror_audio;
         Self {
             devices,
             selected_device: selected,
@@ -158,8 +196,13 @@ impl PhoneTvApp {
             logs: VecDeque::from(["Bienvenue! Connectez vos appareils Android.".to_string()]),
             logs_collapsed: false,
             cam_front: true,
-            with_mic: false,
-            audio_output: false,
+            webcam_audio,
+            mirror_audio,
+            // On, and it has to be: paired with `--turn-screen-off` this is what
+            // keeps the *device* awake while the *panel* stays dark. Switch it off
+            // and the phone really sleeps — display composition stops with it, so
+            // the mirror goes black. The battery bug was never this flag, it was the
+            // pin outliving scrcpy; see `kill_mirror`.
             stay_awake: true,
             webcam_active: false,
             mirror_active: false,
@@ -230,6 +273,14 @@ impl PhoneTvApp {
             security_data_usage_loading: false,
             security_wakelocks: Vec::new(),
             security_wakelocks_loading: false,
+            monitoring_watch: false,
+            monitoring_watch_last: 0.0,
+            monitoring_watch_task: None,
+            monitoring_alerts: Vec::new(),
+            monitoring_unseen: 0,
+            monitoring_prev_processes: None,
+            monitoring_prev_data: None,
+            monitoring_prev_wakelocks: None,
             security_posture: Vec::new(),
             security_posture_loading: false,
             security_permissions_loading: false,
@@ -261,6 +312,40 @@ impl PhoneTvApp {
         self.get_selected().map(|d| d.id.clone())
     }
 
+    /// File a batch of monitoring alerts: announce it once, keep it in the panel,
+    /// and mirror it into the log so the history survives a "Effacer".
+    pub fn push_monitoring_alerts(&mut self, alerts: Vec<MonitoringAlert>) {
+        if alerts.is_empty() {
+            return;
+        }
+        security::alerts::announce(
+            &alerts,
+            self.settings.monitoring_sound,
+            self.settings.monitoring_desktop_notify,
+        );
+        self.record_monitoring_alerts(alerts);
+    }
+
+    /// File alerts that have already been announced — the watch thread announces its
+    /// own, at the moment it finds them, without waiting for a frame.
+    pub fn record_monitoring_alerts(&mut self, alerts: Vec<MonitoringAlert>) {
+        if alerts.is_empty() {
+            return;
+        }
+        for a in &alerts {
+            self.log(&a.message);
+        }
+        self.monitoring_unseen += alerts.len();
+        self.monitoring_alerts.extend(alerts);
+        let excess = self
+            .monitoring_alerts
+            .len()
+            .saturating_sub(security::alerts::MAX_ALERTS);
+        if excess > 0 {
+            self.monitoring_alerts.drain(..excess);
+        }
+    }
+
     pub fn save_settings(&self) {
         let s = Settings {
             dark_mode: self.dark_mode,
@@ -269,6 +354,11 @@ impl PhoneTvApp {
             openrouter_api_key: self.settings.openrouter_api_key.clone(),
             llm_model: self.settings.llm_model.clone(),
             pull_dest_dir: self.pull_dest_dir.clone(),
+            webcam_audio: self.webcam_audio,
+            mirror_audio: self.mirror_audio,
+            monitoring_sound: self.settings.monitoring_sound,
+            monitoring_desktop_notify: self.settings.monitoring_desktop_notify,
+            monitoring_interval_secs: self.settings.monitoring_interval_secs,
         };
         config::save_settings(&s);
     }
@@ -384,8 +474,7 @@ impl PhoneTvApp {
         self.switching_cam = true;
         self.kill_webcam();
         let front = self.cam_front;
-        let with_mic = self.with_mic;
-        let audio_output = self.audio_output;
+        let audio = self.webcam_audio;
         let tx = self.bg_tx.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
@@ -398,7 +487,7 @@ impl PhoneTvApp {
                 Some((wid, opened)) => (wid, true, opened),
                 None => (id.clone(), false, false),
             };
-            let child = adb::start_webcam_process(&stream_id, front, with_mic, audio_output);
+            let child = adb::start_webcam_process(&stream_id, front, audio);
             let _ = tx.send(BgEvent::WebcamSwitched {
                 child,
                 device_id: stream_id,
@@ -417,9 +506,45 @@ impl PhoneTvApp {
         }
     }
 
+    /// (Re)start the mirroring window with the options currently selected.
+    ///
+    /// scrcpy reads its audio source once, at start-up, so switching the audio mode
+    /// on a live mirror means relaunching it.
+    pub fn start_mirror(&mut self) {
+        let Some(id) = self.get_selected_id() else {
+            return;
+        };
+        self.kill_mirror();
+        match adb::start_mirror_process(&id, self.stay_awake, self.mirror_audio) {
+            Some(child) => {
+                self.mirror_child = Some(child);
+                self.mirror_active = true;
+                self.log(&format!(
+                    "Mirroring actif (son : {})",
+                    self.mirror_audio.label()
+                ));
+            }
+            None => {
+                self.mirror_active = false;
+                // Without this the click looked like it did nothing.
+                self.log(
+                    &adb::scrcpy_unavailable_reason()
+                        .unwrap_or_else(|| "Mirroring: scrcpy n'a pas pu démarrer".to_string()),
+                );
+            }
+        }
+    }
+
     pub fn kill_mirror(&mut self) {
-        if let Some(mut child) = self.mirror_child.take() {
-            adb::kill_child_tree(&mut child);
+        let Some(mut child) = self.mirror_child.take() else {
+            return;
+        };
+        adb::kill_child_tree(&mut child);
+        // Belt and braces: scrcpy normally restores this itself, but it only gets to
+        // if it exited cleanly. Without a mirror there is nothing left to keep the
+        // screen up, so an unrestored pin is pure battery drain.
+        if let Some(id) = self.get_selected_id() {
+            adb::set_stay_awake_cmd(&id, false);
         }
     }
 
@@ -767,6 +892,102 @@ impl PhoneTvApp {
         });
     }
 
+    /// Keep the watch thread in step with the UI switches.
+    ///
+    /// The polling used to live in the monitoring view's draw code, which made it
+    /// hostage to the window: another tab open, or a compositor that stops repainting
+    /// a minimised window, and the watch silently stopped — desktop notifications
+    /// included, which are precisely what you want when the window is hidden.
+    fn sync_monitoring_watch(&mut self, ctx: &egui::Context) {
+        let wanted = if self.monitoring_watch {
+            self.get_selected_id().map(|device_id| MonitoringWatchSpec {
+                device_id,
+                interval_secs: self.settings.monitoring_interval_secs.max(1),
+                sound: self.settings.monitoring_sound,
+                desktop: self.settings.monitoring_desktop_notify,
+                blacklist: self.blacklist.clone(),
+            })
+        } else {
+            None
+        };
+
+        if self.monitoring_watch_task.as_ref().map(|t| &t.spec) == wanted.as_ref() {
+            return;
+        }
+        self.stop_monitoring_watch();
+        if let Some(spec) = wanted {
+            self.start_monitoring_watch(spec, ctx);
+        }
+    }
+
+    pub fn stop_monitoring_watch(&mut self) {
+        if let Some(task) = self.monitoring_watch_task.take() {
+            task.stop.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn start_monitoring_watch(&mut self, spec: MonitoringWatchSpec, ctx: &egui::Context) {
+        let stop = Arc::new(AtomicBool::new(false));
+        let tx = self.bg_tx.clone();
+        let ctx = ctx.clone();
+        let stop_thread = stop.clone();
+        let s = spec.clone();
+        std::thread::spawn(move || {
+            let mut prev_processes = None;
+            let mut prev_data = None;
+            let mut prev_wakelocks = None;
+
+            while !stop_thread.load(Ordering::Relaxed) {
+                let processes = security::monitoring::get_running_processes(&s.device_id);
+                let usage = security::monitoring::get_data_usage(&s.device_id);
+                let wakelocks = security::monitoring::get_wakelocks(&s.device_id);
+
+                let mut alerts = Vec::new();
+                if let Some(prev) = prev_processes.as_ref() {
+                    alerts.extend(security::alerts::diff_processes(
+                        prev,
+                        &processes,
+                        &s.blacklist,
+                    ));
+                }
+                if let Some(prev) = prev_data.as_ref() {
+                    alerts.extend(security::alerts::diff_data_usage(prev, &usage));
+                }
+                if let Some(prev) = prev_wakelocks.as_ref() {
+                    alerts.extend(security::alerts::diff_wakelocks(prev, &wakelocks));
+                }
+                prev_processes = Some(security::alerts::processes_snapshot(&processes));
+                prev_data = Some(security::alerts::data_snapshot(&usage));
+                prev_wakelocks = Some(security::alerts::wakelocks_snapshot(&wakelocks));
+
+                security::alerts::announce(&alerts, s.sound, s.desktop);
+                if tx
+                    .send(BgEvent::MonitoringWatch {
+                        processes,
+                        usage,
+                        wakelocks,
+                        alerts,
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+                ctx.request_repaint();
+
+                // Sliced so switching the watch off doesn't wait out a 60 s interval.
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_secs(s.interval_secs);
+                while std::time::Instant::now() < deadline {
+                    if stop_thread.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+            }
+        });
+        self.monitoring_watch_task = Some(MonitoringWatchTask { spec, stop });
+    }
+
     fn process_bg_events(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.bg_rx.try_recv() {
             match event {
@@ -952,16 +1173,57 @@ impl PhoneTvApp {
                     self.security_apps_loaded_count += 1;
                 }
                 BgEvent::SecurityProcesses { processes } => {
+                    if let Some(prev) = self.monitoring_prev_processes.as_ref() {
+                        let alerts =
+                            security::alerts::diff_processes(prev, &processes, &self.blacklist);
+                        self.push_monitoring_alerts(alerts);
+                    }
+                    self.monitoring_prev_processes =
+                        Some(security::alerts::processes_snapshot(&processes));
                     self.security_processes = processes;
                     self.security_processes_loading = false;
                 }
                 BgEvent::SecurityDataUsage { usage } => {
+                    if let Some(prev) = self.monitoring_prev_data.as_ref() {
+                        let alerts = security::alerts::diff_data_usage(prev, &usage);
+                        self.push_monitoring_alerts(alerts);
+                    }
+                    self.monitoring_prev_data = Some(security::alerts::data_snapshot(&usage));
                     self.security_data_usage = usage;
                     self.security_data_usage_loading = false;
                 }
                 BgEvent::SecurityWakelocks { wakelocks } => {
+                    if let Some(prev) = self.monitoring_prev_wakelocks.as_ref() {
+                        let alerts = security::alerts::diff_wakelocks(prev, &wakelocks);
+                        self.push_monitoring_alerts(alerts);
+                    }
+                    self.monitoring_prev_wakelocks =
+                        Some(security::alerts::wakelocks_snapshot(&wakelocks));
                     self.security_wakelocks = wakelocks;
                     self.security_wakelocks_loading = false;
+                }
+                BgEvent::MonitoringWatch {
+                    processes,
+                    usage,
+                    wakelocks,
+                    alerts,
+                } => {
+                    // The thread already diffed and announced; the UI only displays.
+                    self.monitoring_prev_processes =
+                        Some(security::alerts::processes_snapshot(&processes));
+                    self.monitoring_prev_data = Some(security::alerts::data_snapshot(&usage));
+                    self.monitoring_prev_wakelocks =
+                        Some(security::alerts::wakelocks_snapshot(&wakelocks));
+                    self.security_processes = processes;
+                    self.security_data_usage = usage;
+                    self.security_wakelocks = wakelocks;
+                    self.security_processes_loading = false;
+                    self.security_data_usage_loading = false;
+                    self.security_wakelocks_loading = false;
+                    let now = ctx.input(|i| i.time);
+                    self.monitoring_watch_last = now;
+                    self.security_processes_last_refresh = now;
+                    self.record_monitoring_alerts(alerts);
                 }
                 BgEvent::SecurityPosture { checks } => {
                     self.security_posture = checks;
@@ -1194,6 +1456,7 @@ impl eframe::App for PhoneTvApp {
         let ctx = ui.ctx().clone();
         self.process_bg_events(&ctx);
         self.check_children(&ctx);
+        self.sync_monitoring_watch(&ctx);
 
         // Guard: if active tab is disabled, fallback to Devices
         if !self.tab_enabled(self.active_tab) {

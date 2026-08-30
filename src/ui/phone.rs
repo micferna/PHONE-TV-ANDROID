@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::adb;
 use crate::app::PhoneTvApp;
 use crate::theme;
-use crate::types::BgEvent;
+use crate::types::{AudioMode, BgEvent};
 
 fn section(ui: &mut egui::Ui, dark_mode: bool, add_contents: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::NONE
@@ -25,7 +25,51 @@ fn section_title(ui: &mut egui::Ui, title: &str) {
     ui.add_space(6.0);
 }
 
+/// A row of exclusive audio-mode buttons; `true` when the pick changed.
+///
+/// A checkbox pair could not express it: the modes are mutually exclusive scrcpy
+/// sources, and "Média" vs "Tout" is precisely the choice a user has to make to hear
+/// notification sounds.
+fn audio_selector(
+    ui: &mut egui::Ui,
+    dark: bool,
+    current: &mut AudioMode,
+    modes: &[AudioMode],
+) -> bool {
+    let mut changed = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.label(
+            egui::RichText::new("Son :")
+                .size(12.0)
+                .color(theme::text_secondary(dark)),
+        );
+        for mode in modes {
+            let selected = *current == *mode;
+            let mut text = egui::RichText::new(mode.label()).size(12.0);
+            text = if selected {
+                text.strong().color(theme::accent_color())
+            } else {
+                text.color(theme::text_secondary(dark))
+            };
+            let btn = egui::Button::new(text)
+                .corner_radius(4.0)
+                .fill(if selected {
+                    theme::card_selected(dark)
+                } else {
+                    egui::Color32::TRANSPARENT
+                });
+            if ui.add(btn).on_hover_text(mode.hint()).clicked() && !selected {
+                *current = *mode;
+                changed = true;
+            }
+        }
+    });
+    changed
+}
+
 pub fn draw_phone(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+    let dark = app.dark_mode;
     ui.add_space(4.0);
 
     // ======== Streaming (Webcam + Mirror côte à côte) ========
@@ -82,10 +126,27 @@ pub fn draw_phone(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                 });
 
                 ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut app.with_mic, "🎤 Micro");
-                    ui.checkbox(&mut app.audio_output, "🔊 Audio");
-                });
+                let mut webcam_audio = app.webcam_audio;
+                if audio_selector(
+                    ui,
+                    dark,
+                    &mut webcam_audio,
+                    &[
+                        AudioMode::Off,
+                        AudioMode::Mic,
+                        AudioMode::Media,
+                        AudioMode::All,
+                    ],
+                ) {
+                    app.webcam_audio = webcam_audio;
+                    app.save_settings();
+                    // scrcpy fixes its audio source at start-up: a live stream has to
+                    // be relaunched for the new pick to mean anything.
+                    if app.webcam_active {
+                        app.log(&format!("Webcam: son → {}", webcam_audio.label()));
+                        app.start_webcam_async(ctx);
+                    }
+                }
 
                 if app.switching_cam {
                     ui.label(egui::RichText::new("⏳ Switch...").color(theme::warning_color()));
@@ -118,8 +179,13 @@ pub fn draw_phone(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                     } else {
                         // Switches to wireless ADB then launches scrcpy, so the cable
                         // can be unplugged without cutting the stream.
-                        app.log("Démarrage webcam (bascule WiFi)…");
-                        app.start_webcam_async(ctx);
+                        match adb::scrcpy_unavailable_reason() {
+                            Some(reason) => app.log(&reason),
+                            None => {
+                                app.log("Démarrage webcam (bascule WiFi)…");
+                                app.start_webcam_async(ctx);
+                            }
+                        }
                     }
                 }
 
@@ -186,7 +252,24 @@ pub fn draw_phone(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                 ui.add_space(4.0);
 
                 let prev = app.stay_awake;
-                ui.checkbox(&mut app.stay_awake, "☀ Stay Awake");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut app.stay_awake, "☀ Stay Awake")
+                        .on_hover_text(
+                            "Garde l'appareil éveillé pendant le mirroring, dalle \
+                             éteinte. Décoché, le téléphone dort vraiment et le \
+                             mirroring devient noir",
+                        );
+                    if ui
+                        .button("🌙 Écran éteint")
+                        .on_hover_text("Coupe le « stay awake » et rendort l'écran")
+                        .clicked()
+                    {
+                        if let Some(ref id) = app.get_selected_id() {
+                            adb::screen_off(id);
+                            app.log("Écran du téléphone éteint (stay awake coupé)");
+                        }
+                    }
+                });
                 if prev != app.stay_awake {
                     if let Some(ref id) = app.get_selected_id() {
                         adb::set_stay_awake_cmd(id, app.stay_awake);
@@ -195,6 +278,21 @@ pub fn draw_phone(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                         } else {
                             "Stay Awake OFF"
                         });
+                    }
+                }
+
+                ui.add_space(4.0);
+                let mut mirror_audio = app.mirror_audio;
+                if audio_selector(
+                    ui,
+                    dark,
+                    &mut mirror_audio,
+                    &[AudioMode::Off, AudioMode::Media, AudioMode::All],
+                ) {
+                    app.mirror_audio = mirror_audio;
+                    app.save_settings();
+                    if app.mirror_active {
+                        app.start_mirror();
                     }
                 }
 
@@ -219,13 +317,8 @@ pub fn draw_phone(app: &mut PhoneTvApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                         app.kill_mirror();
                         app.mirror_active = false;
                         app.log("Mirroring stoppé");
-                    } else if let Some(ref id) = app.get_selected_id() {
-                        let child = adb::start_mirror_process(id, app.stay_awake);
-                        if child.is_some() {
-                            app.mirror_child = child;
-                            app.mirror_active = true;
-                            app.log("Mirroring actif");
-                        }
+                    } else {
+                        app.start_mirror();
                     }
                 }
 

@@ -4,7 +4,7 @@ use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::types::{Device, DeviceType, TransferState};
+use crate::types::{AudioMode, Device, DeviceType, TransferState};
 
 pub fn adb(args: &[&str]) -> Option<String> {
     Command::new("adb")
@@ -127,6 +127,15 @@ pub fn get_all_devices() -> Vec<Device> {
 pub fn set_stay_awake_cmd(id: &str, enabled: bool) {
     let value = if enabled { "true" } else { "false" };
     adb_fire(id, &["shell", "svc", "power", "stayon", value]);
+}
+
+/// Drop the screen: release the "stay on" pin and put the device back to sleep.
+///
+/// The pin outlives whatever set it (a mirror session, the Stay Awake switch), so
+/// clearing it first is what makes the sleep stick.
+pub fn screen_off(id: &str) {
+    set_stay_awake_cmd(id, false);
+    press_key(id, "KEYCODE_SLEEP");
 }
 
 pub fn press_key(id: &str, key: &str) {
@@ -528,38 +537,109 @@ pub fn scan_network_for_adb() -> Vec<String> {
     result
 }
 
+/// Stop `child` and everything it spawned, giving it a chance to clean up first.
+///
+/// SIGKILL alone left the phone lit: scrcpy restores `stay_on_while_plugged_in` and
+/// the screen power mode in its own teardown, and a killed process never runs it, so
+/// every `--stay-awake` mirror left the screen pinned on — burning battery long after
+/// the window was gone. Ask politely, wait for the teardown, force only if it hangs.
 pub fn kill_child_tree(child: &mut Child) {
+    let pid = child.id().to_string();
     #[cfg(unix)]
     {
-        let pid = child.id();
-        let _ = Command::new("pkill")
-            .args(["-P", &pid.to_string()])
-            .output();
+        let _ = Command::new("pkill").args(["-TERM", "-P", &pid]).output();
+        let _ = Command::new("kill").args(["-TERM", &pid]).output();
     }
     #[cfg(windows)]
     {
-        let pid = child.id();
-        // /T = also terminate child processes, /F = force
+        // Without /F, taskkill asks the process to close itself.
+        let _ = Command::new("taskkill").args(["/T", "/PID", &pid]).output();
+    }
+
+    // The teardown is a couple of adb round trips. Poll instead of sleeping the whole
+    // budget: a clean exit costs ~100 ms here, and this runs on the UI thread.
+    for _ in 0..20 {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    #[cfg(unix)]
+    {
+        let _ = Command::new("pkill").args(["-P", &pid]).output();
+    }
+    #[cfg(windows)]
+    {
         let _ = Command::new("taskkill")
-            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .args(["/F", "/T", "/PID", &pid])
             .output();
     }
     let _ = child.kill();
     let _ = child.wait();
 }
 
-/// Build a scrcpy invocation that works on Linux (via flatpak aurynk) or other
-/// platforms (direct `scrcpy` / `scrcpy.exe` binary on PATH).
-fn scrcpy_command() -> Command {
+/// The flatpak the README recommends when no distribution package is available.
+#[cfg(target_os = "linux")]
+const AURYNK_FLATPAK: &str = "io.github.IshuSinghSE.aurynk";
+
+/// Is `name` an executable on PATH?
+fn on_path(name: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| dir.join(name).is_file())
+}
+
+/// Is the aurynk flatpak actually installed? `flatpak` being on PATH says nothing
+/// about the app, and `flatpak run` on a missing app spawns fine and then fails.
+#[cfg(target_os = "linux")]
+fn aurynk_installed() -> bool {
+    Command::new("flatpak")
+        .args(["info", AURYNK_FLATPAK])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Build a scrcpy invocation, or `None` when scrcpy cannot be found.
+///
+/// A distribution package on PATH is the common case and is preferred; the flatpak
+/// is the documented fallback. Resolving this up front — rather than always spawning
+/// `flatpak` and letting it fail — is what lets callers tell the user *why* nothing
+/// happened instead of silently doing nothing.
+fn scrcpy_command() -> Option<Command> {
+    if on_path("scrcpy") {
+        return Some(Command::new("scrcpy"));
+    }
     #[cfg(target_os = "linux")]
     {
-        let mut cmd = Command::new("flatpak");
-        cmd.args(["run", "--command=scrcpy", "io.github.IshuSinghSE.aurynk"]);
-        cmd
+        if on_path("flatpak") && aurynk_installed() {
+            let mut cmd = Command::new("flatpak");
+            cmd.args(["run", "--command=scrcpy", AURYNK_FLATPAK]);
+            return Some(cmd);
+        }
+    }
+    None
+}
+
+/// Why mirroring and the webcam cannot start, or `None` when scrcpy is available.
+///
+/// The UI shows this instead of a button click that appears to do nothing.
+pub fn scrcpy_unavailable_reason() -> Option<String> {
+    if scrcpy_command().is_some() {
+        return None;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Some(format!(
+            "scrcpy introuvable. Installez-le (`sudo apt install scrcpy`) \
+             ou le flatpak : `flatpak install flathub {AURYNK_FLATPAK}`"
+        ))
     }
     #[cfg(not(target_os = "linux"))]
     {
-        Command::new("scrcpy")
+        Some("scrcpy introuvable. Ajoutez scrcpy au PATH.".to_string())
     }
 }
 
@@ -590,12 +670,7 @@ const FANOUT_SINKS: [&str; 4] = [
 ];
 
 /// Blocks for up to ~30s while retrying; call it off the UI thread.
-pub fn start_webcam_process(
-    id: &str,
-    front: bool,
-    with_mic: bool,
-    audio_output: bool,
-) -> Option<Child> {
+pub fn start_webcam_process(id: &str, front: bool, audio: AudioMode) -> Option<Child> {
     let facing_arg = format!("--camera-facing={}", if front { "front" } else { "back" });
     let mut args = vec![
         "-s".to_string(),
@@ -611,18 +686,11 @@ pub fn start_webcam_process(
     #[cfg(target_os = "linux")]
     args.push(format!("--v4l2-sink={WEBCAM_SINK}"));
 
-    if with_mic {
-        args.push("--audio-source=mic".to_string());
-    } else if audio_output {
-        args.push("--audio-source=playback".to_string());
-        args.push("--audio-dup".to_string());
-    } else {
-        args.push("--no-audio".to_string());
-    }
+    args.extend(audio.scrcpy_args());
 
     for attempt in 1..=WEBCAM_ATTEMPTS {
         // A failure to spawn at all means no scrcpy binary: retrying won't help.
-        let mut child = scrcpy_command().args(&args).spawn().ok()?;
+        let mut child = scrcpy_command()?.args(&args).spawn().ok()?;
         std::thread::sleep(WEBCAM_SETTLE);
         match child.try_wait() {
             Ok(None) => {
@@ -986,17 +1054,19 @@ fn pipewire_has_camera_sources() -> bool {
     })
 }
 
-pub fn start_mirror_process(id: &str, stay_awake: bool) -> Option<Child> {
+pub fn start_mirror_process(id: &str, stay_awake: bool, audio: AudioMode) -> Option<Child> {
     let mut args = vec![
         "-s".to_string(),
         id.to_string(),
-        "--no-audio".to_string(),
         "--turn-screen-off".to_string(),
+        // Leave the phone dark on the way out, whatever state the session ended in.
+        "--power-off-on-close".to_string(),
     ];
+    args.extend(audio.scrcpy_args());
     if stay_awake {
         args.push("--stay-awake".to_string());
     }
-    scrcpy_command().args(&args).spawn().ok()
+    scrcpy_command()?.args(&args).spawn().ok()
 }
 
 /// Returns true on platforms that can route the phone camera straight to a
